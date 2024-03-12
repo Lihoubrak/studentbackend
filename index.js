@@ -3,6 +3,7 @@ const sequelize = require("./models/ConnectionDB");
 const app = express();
 const cors = require("cors");
 const Relationship = require("./models/Relationship");
+const path = require("path");
 const port = 3000;
 const userRouter = require("./routes/User");
 const dormRouter = require("./routes/Dormitory");
@@ -15,19 +16,22 @@ const waterRouter = require("./routes/Water");
 const eventRouter = require("./routes/Event");
 const productEventRouter = require("./routes/ProductEvent");
 const participantEventRouter = require("./routes/ParticipantEvent");
-const heathcareRouter = require("./routes/ParticipantEvent");
+const heathcareRouter = require("./routes/Healthcare");
 const contributionHealthcareRouter = require("./routes/ContributionHealthcare");
 const supportEventRouter = require("./routes/SupportEvent");
+const notificationsRouter = require("./routes/Notification");
+const Dormitory = require("./models/Dormitory");
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public/images")));
 Relationship();
 sequelize
   .sync()
   .then(() => {
-    console.log("You was table created!");
+    console.log("Your table was created!");
   })
   .catch((err) => {
-    console.error("Unable to create  table:", err);
+    console.error("Unable to create table:", err);
   });
 app.use("/users/v1", userRouter);
 app.use("/dorms/v2", dormRouter);
@@ -43,6 +47,16 @@ app.use("/participantevents/v11", participantEventRouter);
 app.use("/heathcares/v12", heathcareRouter);
 app.use("/contributionhealthcares/v13", contributionHealthcareRouter);
 app.use("/supportevents/v14", supportEventRouter);
+app.use("/notifications/v15", notificationsRouter);
+//Get All Dorm and University in Hanoi
+app.use("/alldormuniversity", async (req, res, next) => {
+  try {
+    const alldorm = await Dormitory.findAll();
+    res.status(200).json(alldorm);
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });

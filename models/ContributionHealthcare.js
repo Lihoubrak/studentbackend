@@ -6,7 +6,7 @@ const ContributionHealthcare = sequelize.define(
   {
     date: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
     typePayMoney: {
       type: DataTypes.STRING,
@@ -18,7 +18,7 @@ const ContributionHealthcare = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

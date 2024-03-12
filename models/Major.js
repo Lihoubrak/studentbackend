@@ -17,9 +17,13 @@ const Major = sequelize.define(
       defaultValue: "No Image",
       allowNull: false,
     },
+    dateForStudying: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

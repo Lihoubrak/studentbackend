@@ -22,6 +22,7 @@ const Water = sequelize.define(
     pricePerKwh: {
       type: DataTypes.FLOAT,
       allowNull: false,
+      defaultValue: 4800.0,
     },
     totalAmount: {
       type: DataTypes.FLOAT,
@@ -31,15 +32,15 @@ const Water = sequelize.define(
     support: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: 0,
+      defaultValue: 6,
     },
     date: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

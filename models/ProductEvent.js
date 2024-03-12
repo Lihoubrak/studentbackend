@@ -16,9 +16,13 @@ const ProductEvent = sequelize.define(
       type: DataTypes.FLOAT,
       allowNull: false,
     },
+    total: {
+      type: DataTypes.FLOAT,
+      allowNull: false,
+    },
     dateBuy: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
     note: {
       type: DataTypes.STRING,
@@ -26,7 +30,7 @@ const ProductEvent = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

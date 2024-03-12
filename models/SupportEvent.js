@@ -12,9 +12,17 @@ const SupportEvent = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    typePay: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

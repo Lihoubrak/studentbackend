@@ -6,7 +6,7 @@ const Healthcare = sequelize.define(
   {
     date: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
     note: {
       type: DataTypes.STRING,
@@ -20,6 +20,10 @@ const Healthcare = sequelize.define(
       type: DataTypes.FLOAT,
       allowNull: true,
     },
+    typeofDisease: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     totalPatientPay: {
       type: DataTypes.FLOAT,
       allowNull: true,
@@ -30,7 +34,7 @@ const Healthcare = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

@@ -38,7 +38,7 @@ function generateToken(user) {
       username: user.username,
       email: user.email,
       avatar: user.avatar,
-      role: user.role.roleName,
+      role: user.Role.roleName,
     },
     process.env.TOKEN_SECRET,
     { expiresIn: "3d" }

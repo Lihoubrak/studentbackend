@@ -2,8 +2,10 @@ const ContributionHealthcare = require("./ContributionHealthcare");
 const Dormitory = require("./Dormitory");
 const Electrical = require("./Electrical");
 const Event = require("./Event");
+const ExpoNotifications = require("./ExpoNotifications");
 const Healthcare = require("./Healthcare");
 const Major = require("./Major");
+const Notification = require("./Notification");
 const ParticipantEvent = require("./ParticipantEvent");
 const Passport = require("./Passport");
 const ProductEvent = require("./ProductEvent");
@@ -18,7 +20,7 @@ const Relationship = () => {
   // Define associations
 
   // User associations
-  User.hasMany(Passport); // User has many passports
+  User.hasOne(Passport); // User has many passports
   Passport.belongsTo(User); // Passport belongs to a user
   Major.hasMany(User); // Major has many users
   User.belongsTo(Major); // User belongs to a major
@@ -52,6 +54,11 @@ const Relationship = () => {
   Dormitory.belongsTo(User); // Dormitory belongs to a user
   User.hasMany(School); // User has many schools
   School.belongsTo(User); // School belongs to a user
+
+  Notification.hasMany(ExpoNotifications);
+  ExpoNotifications.belongsTo(Notification);
+  User.hasMany(Notification);
+  Notification.belongsTo(User);
 };
 
 module.exports = Relationship;

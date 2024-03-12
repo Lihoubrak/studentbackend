@@ -16,9 +16,13 @@ const Notification = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    type: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

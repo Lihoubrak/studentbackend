@@ -11,7 +11,7 @@ const User = sequelize.define(
     },
     password: {
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: false,
     },
     firstName: {
       type: DataTypes.STRING,
@@ -53,9 +53,13 @@ const User = sequelize.define(
       type: DataTypes.STRING,
       defaultValue: "No Avatar",
     },
+    expo_push_token: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

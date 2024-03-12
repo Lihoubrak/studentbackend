@@ -6,6 +6,7 @@ const Room = sequelize.define(
   {
     roomNumber: {
       type: DataTypes.STRING,
+      unique: true,
       allowNull: false,
     },
     numberOfStudents: {
@@ -15,7 +16,7 @@ const Room = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

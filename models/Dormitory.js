@@ -23,7 +23,7 @@ const Dormitory = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

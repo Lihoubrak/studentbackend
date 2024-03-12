@@ -23,18 +23,18 @@ const Event = sequelize.define(
     },
     eventDate: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
     eventExpiry: {
       type: DataTypes.DATEONLY,
-      allowNull: false,
+      allowNull: true,
     },
     foodMenu: {
-      type: DataTypes.FLOAT,
+      type: DataTypes.JSON,
       allowNull: false,
     },
     eventsInProgram: {
-      type: DataTypes.FLOAT,
+      type: DataTypes.JSON,
       allowNull: false,
     },
     ticketPrice: {
@@ -52,7 +52,7 @@ const Event = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 

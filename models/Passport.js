@@ -32,6 +32,10 @@ const Passport = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    dateofbirth: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
     placeofbirth: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -58,7 +62,7 @@ const Passport = sequelize.define(
     },
   },
   {
-    timestamps: false,
+    timestamps: true,
   }
 );
 
