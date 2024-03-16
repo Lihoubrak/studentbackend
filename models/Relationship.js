@@ -1,10 +1,12 @@
 const ContributionHealthcare = require("./ContributionHealthcare");
+const Conversation = require("./Conversation");
 const Dormitory = require("./Dormitory");
 const Electrical = require("./Electrical");
 const Event = require("./Event");
 const ExpoNotifications = require("./ExpoNotifications");
 const Healthcare = require("./Healthcare");
 const Major = require("./Major");
+const Message = require("./Message");
 const Notification = require("./Notification");
 const ParticipantEvent = require("./ParticipantEvent");
 const Passport = require("./Passport");
@@ -59,6 +61,10 @@ const Relationship = () => {
   ExpoNotifications.belongsTo(Notification);
   User.hasMany(Notification);
   Notification.belongsTo(User);
+
+  Message.belongsTo(User, { as: "sender", foreignKey: "sender_id" });
+  Message.belongsTo(User, { as: "receiver", foreignKey: "receiver_id" });
+  Message.belongsTo(Conversation, { foreignKey: "conversation_id" });
 };
 
 module.exports = Relationship;

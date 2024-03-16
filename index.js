@@ -20,6 +20,7 @@ const heathcareRouter = require("./routes/Healthcare");
 const contributionHealthcareRouter = require("./routes/ContributionHealthcare");
 const supportEventRouter = require("./routes/SupportEvent");
 const notificationsRouter = require("./routes/Notification");
+const messageRouter = require("./routes/Message");
 const Dormitory = require("./models/Dormitory");
 app.use(cors());
 app.use(express.json());
@@ -48,6 +49,7 @@ app.use("/heathcares/v12", heathcareRouter);
 app.use("/contributionhealthcares/v13", contributionHealthcareRouter);
 app.use("/supportevents/v14", supportEventRouter);
 app.use("/notifications/v15", notificationsRouter);
+app.use("/messages/v16", messageRouter);
 //Get All Dorm and University in Hanoi
 app.use("/alldormuniversity", async (req, res, next) => {
   try {

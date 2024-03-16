@@ -119,4 +119,25 @@ router.put("/addstudentroom", async (req, res) => {
   }
 });
 
+//For Application
+
+router.get("/member", checkRole("STUDENT"), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findOne({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const AllMemberInRoom = await User.findAll({
+      where: { RoomId: user.RoomId },
+      include: [{ model: Room, include: { model: Dormitory } }],
+      attributes: { exclude: ["password"] },
+    });
+    res.status(200).json(AllMemberInRoom);
+  } catch (error) {
+    console.error("Error fetching members:", error);
+    res.status(500).json({ error: "An error occurred while fetching members" });
+  }
+});
+
 module.exports = router;

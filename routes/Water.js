@@ -4,6 +4,7 @@ const { Sequelize, Op } = require("sequelize");
 const Room = require("../models/Room");
 const { checkRole } = require("../middleware/authenticateToken");
 const Dormitory = require("../models/Dormitory");
+const User = require("../models/User");
 const router = express.Router();
 router.post("/create", async (req, res) => {
   try {
@@ -93,6 +94,33 @@ router.get("/all", checkRole("KTX"), async (req, res) => {
       });
     }
     res.status(200).json(allWaterWithMonthYear);
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+//For Application
+router.get("/user/all", checkRole("STUDENT"), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { year, month } = req.query;
+    const user = await User.findOne({ where: { id: userId } });
+    const startDate = new Date(year, month - 1, 1); // Note: month is zero-based in JavaScript Date object
+    const endDate = new Date(year, month, 0); // Note: month is zero-based in JavaScript Date object
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const water = await Water.findOne({
+      where: {
+        RoomId: user.RoomId,
+        date: {
+          [Op.between]: [startDate, endDate],
+        },
+      },
+      include: { model: Room },
+    });
+    res.status(200).json(water);
   } catch (error) {
     res.status(500).json({ error: "Internal server error" });
   }

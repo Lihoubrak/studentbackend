@@ -6,7 +6,7 @@ const { checkRole } = require("../middleware/authenticateToken");
 const router = express.Router();
 router.post(
   "/create",
-  checkRole("KTX"),
+  checkRole(["KTX", "SCH"]),
   upload.single("eventImage"),
   async (req, res) => {
     try {
@@ -69,10 +69,10 @@ router.post(
   }
 );
 
-router.get("/all", checkRole("KTX"), async (req, res) => {
+router.get("/all", checkRole(["KTX", "SCH"]), async (req, res) => {
   try {
     const userId = req.user.id;
-    const allEvents = await Event.findAll({ where: { id: userId } });
+    const allEvents = await Event.findAll({ where: { UserId: userId } });
     if (allEvents.length === 0) {
       return res.status(404).json({ error: "No events found." });
     }
@@ -151,6 +151,41 @@ router.get("/:eventId/detail", async (req, res) => {
     res.status(200).json(event);
   } catch (error) {
     res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+//for Application
+router.get("/allevent", async (req, res) => {
+  try {
+    const { year } = req.query;
+    const allEvent = await Event.findAll({
+      where: {
+        eventDate: {
+          [Op.between]: [new Date(`${year}-01-01`), new Date(`${year}-12-31`)],
+        },
+      },
+    });
+    res.status(200).json(allEvent);
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+router.get("/detailevent/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const eventDetail = await Event.findOne({
+      where: {
+        id: eventId,
+      },
+    });
+    if (!eventDetail) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    res.status(200).json(eventDetail);
+  } catch (error) {
+    console.error("Error fetching event details:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 

@@ -5,12 +5,13 @@ const { checkRole } = require("../middleware/authenticateToken");
 const Room = require("../models/Room");
 const User = require("../models/User");
 const { Op } = require("sequelize");
+const Major = require("../models/Major");
 const router = express.Router();
-
-router.post("/send", checkRole("KTX"), async (req, res) => {
+const sendPushNotifications = require("../utils/sendPushNotifications");
+router.post("/send", checkRole(["KTX", "SCH"]), async (req, res) => {
   try {
     const userId = req.user.id;
-    const { description, content, file, type, dormId } = req.body;
+    const { description, content, file, type, notificationTo } = req.body;
 
     // Step 1: Create a new notification
     const newNotification = await Notification.create({
@@ -21,38 +22,54 @@ router.post("/send", checkRole("KTX"), async (req, res) => {
       UserId: userId,
     });
 
-    // Step 2: Retrieve roomIds
-    const roomIds = await Room.findAll({ where: { DormitoryId: dormId } });
-    if (roomIds.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No rooms found for the given dormId" });
+    let AllIds;
+    let tokenIds; // Define tokenIds variable
+
+    if (type === "Dorms") {
+      AllIds = await Room.findAll({
+        where: { DormitoryId: notificationTo },
+      });
+      if (AllIds.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "No rooms found for the given notificationTo" });
+      }
+      tokenIds = await User.findAll({
+        attributes: ["expo_push_token"],
+        where: { RoomId: { [Op.in]: AllIds.map((room) => room.id) } },
+      });
+      if (tokenIds.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "No users found for the given roomIds" });
+      }
+    } else if (type === "Univ") {
+      AllIds = await Major.findAll({
+        where: { SchoolId: notificationTo },
+      });
+      if (AllIds.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "No major found for the given notificationTo" });
+      }
+      tokenIds = await User.findAll({
+        attributes: ["expo_push_token"],
+        where: { MajorId: { [Op.in]: AllIds.map((major) => major.id) } },
+      });
+      if (tokenIds.length === 0) {
+        return res
+          .status(404)
+          .json({ error: "No users found for the given majorIds" });
+      }
     }
-
-    // Step 3: Retrieve tokenIds
-    const tokenIds = await User.findAll({
-      attributes: ["expo_push_token"],
-      where: { RoomId: { [Op.in]: roomIds.map((room) => room.id) } },
-    });
-
-    if (tokenIds.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No users found for the given roomIds" });
-    }
-
-    // Step 4: Create ExpoNotifications in bulk
-    const expoNotifications = await ExpoNotifications.bulkCreate(
-      tokenIds.map((token) => ({
-        expo_push_token: token.expo_push_token,
-        sent_at: new Date(),
-        NotificationId: newNotification.id,
-      }))
+    await sendPushNotifications(
+      tokenIds.map((user) => user.expo_push_token),
+      description,
+      content
     );
 
     res.status(201).json({
       notification: newNotification,
-      expoNotifications: expoNotifications,
     });
   } catch (error) {
     console.error("Error sending notification:", error);

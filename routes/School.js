@@ -4,46 +4,53 @@ const Major = require("../models/Major");
 const User = require("../models/User");
 const { Op } = require("sequelize");
 const upload = require("../middleware/uploadImage");
+const { checkRole } = require("../middleware/authenticateToken");
 const router = express.Router();
 
-router.post("/create", upload.single("schoolImage"), async (req, res) => {
-  try {
-    const { schoolName, schoolLocation, schoolDescription, userId } = req.body;
+router.post(
+  "/create",
+  checkRole("SCH"),
+  upload.single("schoolImage"),
+  async (req, res) => {
+    try {
+      const { schoolName, schoolLocation, schoolDescription } = req.body;
 
-    // Validate required fields
-    if (!schoolName || !schoolLocation || !schoolDescription) {
-      return res.status(400).json({
-        error: "School name, location, and description are required.",
+      // Validate required fields
+      if (!schoolName || !schoolLocation || !schoolDescription) {
+        return res.status(400).json({
+          error: "School name, location, and description are required.",
+        });
+      }
+
+      let schoolImage = "No Image";
+      if (req.file) {
+        // If a file is uploaded, set schoolImage to the filename
+        const localhost = "http://localhost:3000/";
+        schoolImage = localhost + req.file.filename;
+      }
+      const userId = req.user.id;
+      const newSchool = await School.create({
+        UserId: userId,
+        schoolName,
+        schoolLocation,
+        schoolDescription,
+        schoolImage,
       });
+
+      res.status(201).json(newSchool);
+    } catch (error) {
+      console.error(error);
+      res
+        .status(500)
+        .json({ error: "Internal server error. Failed to create school." });
     }
-
-    let schoolImage = "No Image";
-    if (req.file) {
-      // If a file is uploaded, set schoolImage to the filename
-      const localhost = "http://localhost:3000/";
-      schoolImage = localhost + req.file.filename;
-    }
-
-    const newSchool = await School.create({
-      UserId: userId,
-      schoolName,
-      schoolLocation,
-      schoolDescription,
-      schoolImage,
-    });
-
-    res.status(201).json(newSchool);
-  } catch (error) {
-    console.error(error);
-    res
-      .status(500)
-      .json({ error: "Internal server error. Failed to create school." });
   }
-});
+);
 
-router.get("/all", async (req, res) => {
+router.get("/all", checkRole("SCH"), async (req, res) => {
   try {
-    const schools = await School.findAll();
+    const userId = req.user.id;
+    const schools = await School.findAll({where:{UserId : userId}});
     res.status(200).json(schools);
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });
