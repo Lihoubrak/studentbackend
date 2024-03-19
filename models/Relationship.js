@@ -64,7 +64,8 @@ const Relationship = () => {
 
   Message.belongsTo(User, { as: "sender", foreignKey: "sender_id" });
   Message.belongsTo(User, { as: "receiver", foreignKey: "receiver_id" });
-  Message.belongsTo(Conversation, { foreignKey: "conversation_id" });
+  Conversation.belongsTo(Message);
+  Conversation.belongsTo(User);
 };
 
 module.exports = Relationship;

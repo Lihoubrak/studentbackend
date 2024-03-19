@@ -56,6 +56,10 @@ const Passport = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    isApprove: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
     image: {
       type: DataTypes.STRING,
       defaultValue: "No Image",

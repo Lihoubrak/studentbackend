@@ -1,6 +1,5 @@
 const express = require("express");
 const sequelize = require("./models/ConnectionDB");
-const app = express();
 const cors = require("cors");
 const Relationship = require("./models/Relationship");
 const path = require("path");
@@ -22,10 +21,12 @@ const supportEventRouter = require("./routes/SupportEvent");
 const notificationsRouter = require("./routes/Notification");
 const messageRouter = require("./routes/Message");
 const Dormitory = require("./models/Dormitory");
+const { app, server } = require("./sockets/sockets");
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public/images")));
 Relationship();
+
 sequelize
   .sync()
   .then(() => {
@@ -34,6 +35,7 @@ sequelize
   .catch((err) => {
     console.error("Unable to create table:", err);
   });
+
 app.use("/users/v1", userRouter);
 app.use("/dorms/v2", dormRouter);
 app.use("/rooms/v3", roomRouter);
@@ -50,7 +52,7 @@ app.use("/contributionhealthcares/v13", contributionHealthcareRouter);
 app.use("/supportevents/v14", supportEventRouter);
 app.use("/notifications/v15", notificationsRouter);
 app.use("/messages/v16", messageRouter);
-//Get All Dorm and University in Hanoi
+
 app.use("/alldormuniversity", async (req, res, next) => {
   try {
     const alldorm = await Dormitory.findAll();
@@ -59,6 +61,7 @@ app.use("/alldormuniversity", async (req, res, next) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
+
+server.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
 });

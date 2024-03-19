@@ -12,6 +12,11 @@ const ExpoNotifications = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    isSeen: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: false,
+    },
   },
   {
     timestamps: true,

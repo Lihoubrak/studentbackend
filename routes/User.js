@@ -111,9 +111,15 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/all", async (req, res) => {
+router.get("/all/:userId", async (req, res) => {
   try {
+    const userId = req.params.userId;
     const allStudents = await User.findAll({
+      where: {
+        id: {
+          [Op.not]: userId,
+        },
+      },
       include: { model: Room, include: { model: Dormitory } },
       attributes: { exclude: ["password"] },
     });

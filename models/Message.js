@@ -23,6 +23,11 @@ const Message = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: "pending",
+    },
   },
   {
     timestamps: true,
