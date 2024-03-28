@@ -61,20 +61,20 @@ router.get("/detail/:roomId", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-router.get("/all", checkRole("KTX"), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const dormitories = await Dormitory.findAll({ where: { UserId: userId } });
-    const allRooms = await Room.findAll({
-      where: {
-        DormitoryId: { [Op.in]: dormitories.map((dormitory) => dormitory.id) },
-      },
-    });
-    res.status(200).json(allRooms);
-  } catch (error) {
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
+// router.get("/all", checkRole("KTX"), async (req, res) => {
+//   try {
+//     const userId = req.user.id;
+//     const dormitories = await Dormitory.findAll({ where: { UserId: userId } });
+//     const allRooms = await Room.findAll({
+//       where: {
+//         DormitoryId: { [Op.in]: dormitories.map((dormitory) => dormitory.id) },
+//       },
+//     });
+//     res.status(200).json(allRooms);
+//   } catch (error) {
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// });
 
 router.put("/switchrooms", async (req, res) => {
   try {
@@ -128,11 +128,14 @@ router.get("/member", checkRole("STUDENT"), async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
+
+    // Add condition to exclude users with null RoomId
     const AllMemberInRoom = await User.findAll({
-      where: { RoomId: user.RoomId },
+      where: { RoomId: user.RoomId != null ? user.RoomId : { [Op.not]: null } },
       include: [{ model: Room, include: { model: Dormitory } }],
       attributes: { exclude: ["password"] },
     });
+
     res.status(200).json(AllMemberInRoom);
   } catch (error) {
     console.error("Error fetching members:", error);

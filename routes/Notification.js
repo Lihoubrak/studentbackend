@@ -208,4 +208,22 @@ router.put(
     }
   }
 );
+router.get("/number-notification", checkRole("STUDENT"), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findByPk(userId);
+    const numberNotificationNotYetSeen = await ExpoNotifications.count({
+      where: {
+        [Op.and]: [
+          { isSeen: false },
+          { expo_push_token: user.expo_push_token },
+        ],
+      },
+    });
+    res.status(200).json({ count: numberNotificationNotYetSeen });
+  } catch (error) {
+    console.error("Error fetching number of notifications:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 module.exports = router;

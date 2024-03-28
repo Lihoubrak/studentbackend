@@ -2,9 +2,7 @@ const express = require("express");
 const Message = require("../models/Message");
 const User = require("../models/User");
 const { Op, json } = require("sequelize");
-const sequelize = require("../models/ConnectionDB");
 const { checkRole } = require("../middleware/authenticateToken");
-const Conversation = require("../models/Conversation");
 const { getReceiverSocketId, io } = require("../sockets/sockets");
 const sendPushNotifications = require("../utils/sendPushNotifications");
 const router = express.Router();
@@ -25,12 +23,40 @@ router.post(
         sender_id: senderId,
         receiver_id: receiverId,
       });
-      // SOCKET IO FUNCTIONALITY WILL GO HERE
-      const receiverSocketId = getReceiverSocketId(receiverId);
-      if (receiverSocketId) {
-        // io.to(<socket_id>).emit() used to send events to specific client
-        io.to(receiverSocketId).emit("newMessage", newMessage);
-      }
+
+      const MessageWithSender = await Message.findByPk(newMessage.id, {
+        include: [
+          {
+            model: User,
+            as: "sender", // Alias for sender
+            attributes: ["id", "firstName", "lastName", "avatar"],
+          },
+          {
+            model: User,
+            as: "receiver", // Alias for receiver
+            attributes: ["id", "firstName", "lastName", "avatar"],
+          },
+        ],
+      });
+
+      const user =
+        senderId === MessageWithSender.sender.id
+          ? MessageWithSender.sender
+          : MessageWithSender.receiver;
+
+      const formatMessage = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.avatar,
+        lastMessage: newMessage.content,
+        sendDate: newMessage.createdAt,
+        sender_id: newMessage.sender_id,
+        receiver_id: newMessage.receiver_id,
+        seen_by_user1: false,
+        seen_by_user2: false,
+      };
+
       const findReceiver = await User.findAll({
         where: { id: receiverId },
         attributes: ["expo_push_token"],
@@ -40,6 +66,13 @@ router.post(
         (description = "lihou"),
         content
       );
+      // SOCKET IO FUNCTIONALITY WILL GO HERE
+      const receiverSocketId = getReceiverSocketId(receiverId);
+      if (receiverSocketId) {
+        // io.to(<socket_id>).emit() used to send events to specific client
+        io.to(receiverSocketId).emit("newMessage", newMessage);
+        io.to(receiverSocketId).emit("listMessage", formatMessage);
+      }
       res.status(201).json(newMessage);
     } catch (error) {
       console.error(error);
@@ -92,7 +125,8 @@ router.get(
           "receiver_id",
           "createdAt",
           "content",
-          "status",
+          "seen_by_user1",
+          "seen_by_user2",
         ],
         order: [["createdAt", "DESC"]],
       });
@@ -130,7 +164,10 @@ router.get(
           avatar: user.avatar,
           lastMessage: lastMessage ? lastMessage.content : null,
           sendDate: lastMessage ? lastMessage.createdAt : null,
-          status: lastMessage ? lastMessage.status : null,
+          seen_by_user1: lastMessage ? lastMessage.seen_by_user1 : null,
+          seen_by_user2: lastMessage ? lastMessage.seen_by_user2 : null,
+          sender_id: lastMessage ? lastMessage.sender_id : null,
+          receiver_id: lastMessage ? lastMessage.receiver_id : null,
         };
       });
       // Emit real-time event to the client with the list of users
@@ -148,24 +185,24 @@ router.get(
     }
   }
 );
-
 router.put(
-  "/update-status-seen/:receiverId",
+  "/update-status-seen/:messageId",
   checkRole(["KTX", "SCH", "STUDENT"]),
   async (req, res) => {
     try {
-      const receiverId = req.params.receiverId;
+      const messageId = req.params.messageId;
+      const userId = req.user.id;
+      const message = await Message.findByPk(messageId);
+      if (message.sender_id === userId) {
+        // Update seen_by_user1
+        await message.update({ seen_by_user1: true });
+      } else if (message.receiver_id === userId) {
+        // Update seen_by_user2
+        await message.update({ seen_by_user2: true });
+      } else {
+        return res.status(403).send("Unauthorized");
+      }
 
-      // Update messages for the specified receiver as 'seen'
-      await Message.update(
-        { status: "seen" },
-        {
-          where: {
-            receiver_id: receiverId,
-            status: "pending",
-          },
-        }
-      );
       res.sendStatus(200);
     } catch (error) {
       console.error("Error updating message status:", error);
@@ -173,5 +210,20 @@ router.put(
     }
   }
 );
-
+router.get("/number-message", checkRole(["STUDENT"]), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findByPk(userId);
+    const numberMessageNotYetSeen = await Message.count({
+      where: {
+        seen_by_user2: false,
+        receiver_id: user.id,
+      },
+    });
+    res.status(200).json({ count: numberMessageNotYetSeen });
+  } catch (error) {
+    console.error("Error fetching number of messages:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
 module.exports = router;

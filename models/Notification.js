@@ -9,7 +9,7 @@ const Notification = sequelize.define(
       allowNull: false,
     },
     content: {
-      type: DataTypes.STRING,
+      type: DataTypes.TEXT("long"),
       allowNull: true,
     },
     file: {

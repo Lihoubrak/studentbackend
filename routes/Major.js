@@ -3,6 +3,8 @@ const Major = require("../models/Major");
 const User = require("../models/User");
 const { Op } = require("sequelize");
 const upload = require("../middleware/uploadImage");
+const { checkRole } = require("../middleware/authenticateToken");
+const School = require("../models/School");
 const router = express.Router();
 router.post("/create", upload.single("majorImage"), async (req, res) => {
   try {
@@ -84,4 +86,5 @@ router.get("/detail/:majorId", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 module.exports = router;

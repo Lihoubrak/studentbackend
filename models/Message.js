@@ -23,10 +23,15 @@ const Message = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
     },
-    status: {
-      type: DataTypes.STRING,
+    seen_by_user1: {
+      type: DataTypes.BOOLEAN,
       allowNull: true,
-      defaultValue: "pending",
+      defaultValue: false,
+    },
+    seen_by_user2: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: false,
     },
   },
   {

@@ -15,9 +15,6 @@ router.post("/register", async (req, res) => {
       username,
       password,
       confirmPassword,
-      roleId,
-      majorId,
-      roomId,
       firstName,
       lastName,
       age,
@@ -29,34 +26,42 @@ router.post("/register", async (req, res) => {
       zalo,
       avatar,
       expo_push_token,
+      room,
+      major,
+      schoolId,
+      dormitoryId,
     } = req.body;
-
-    // Input validation
-    if (!username || !password || !confirmPassword) {
-      return res.status(400).json({ error: "All fields are required." });
-    }
     if (password !== confirmPassword) {
       return res.status(400).json({ error: "Passwords do not match." });
     }
-
     // Check if username already exists
-    const existingUser = await User.findOne({
-      where: { username: username },
-    });
+    const existingUser = await User.findOne({ where: { username: username } });
     if (existingUser) {
       return res.status(400).json({ error: "Username already exists." });
     }
-
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
+    // Get Room and Major IDs
+    const roomInstance = await Room.findOne({
+      where: { roomNumber: String(room), DormitoryId: dormitoryId },
+    });
+    if (!roomInstance) {
+      return res.status(400).json({ error: "Room not found." });
+    }
+    const majorInstance = await Major.findOne({
+      where: { majorName: String(major), SchoolId: schoolId },
+    });
+    if (!majorInstance) {
+      return res.status(400).json({ error: "Major not found." });
+    }
 
     // Create new user
     const newUser = await User.create({
       username,
       password: hashedPassword,
-      RoleId: roleId,
-      MajorId: majorId,
-      RoomId: roomId,
+      RoleId: 3,
+      MajorId: majorInstance.id,
+      RoomId: roomInstance.id,
       firstName,
       lastName,
       age,
@@ -69,11 +74,9 @@ router.post("/register", async (req, res) => {
       avatar,
       expo_push_token,
     });
-
-    // Return success response
     res.status(201).json(newUser);
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).json({ error: "Internal server error." });
   }
 });
@@ -111,9 +114,9 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/all/:userId", async (req, res) => {
+router.get("/all", checkRole(["KTX", "SCH"]), async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const userId = req.user.id;
     const allStudents = await User.findAll({
       where: {
         id: {
