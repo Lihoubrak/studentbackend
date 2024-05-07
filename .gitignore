@@ -14,7 +14,9 @@ capybara-*.html
 *.orig
 rerun.txt
 pickle-email-*.html
-
+Dockerfile
+studentapp-556ec-firebase-adminsdk-aqrur-b66d18fa3c.json
+.dockerignore
 # Ignore all logfiles and tempfiles.
 /log/*
 /tmp/*

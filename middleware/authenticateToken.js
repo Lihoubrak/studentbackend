@@ -19,7 +19,6 @@ function checkRole(roles) {
       if (err) {
         return res.status(401).json({ message: "Unauthorized" });
       }
-
       const userRole = decoded.role;
       if (roles.includes(userRole.trim())) {
         req.user = decoded;
@@ -38,7 +37,7 @@ function generateToken(user) {
       username: user.username,
       email: user.email,
       avatar: user.avatar,
-      role: user.Role.roleName,
+      role: user.role,
     },
     process.env.TOKEN_SECRET,
     { expiresIn: "3d" }

@@ -1,19 +1,19 @@
 const express = require("express");
-const School = require("../models/School");
-const Major = require("../models/Major");
-const User = require("../models/User");
-const { Op } = require("sequelize");
 const upload = require("../middleware/uploadImage");
 const { checkRole } = require("../middleware/authenticateToken");
+const { firestore } = require("../firebase/firebase");
 const router = express.Router();
-
+const admin = require("firebase-admin");
+const { Filter } = require("firebase-admin/firestore");
+const { deleteMajorsAndClearUsers } = require("../services/firestoreService");
 router.post(
   "/create",
-  checkRole("SCH"),
+  checkRole(["Admin"]),
   upload.single("schoolImage"),
   async (req, res) => {
     try {
-      const { schoolName, schoolLocation, schoolDescription } = req.body;
+      const { schoolName, schoolLocation, schoolDescription, managers } =
+        req.body;
 
       // Validate required fields
       if (!schoolName || !schoolLocation || !schoolDescription) {
@@ -29,15 +29,16 @@ router.post(
         schoolImage = localhost + req.file.filename;
       }
       const userId = req.user.id;
-      const newSchool = await School.create({
+      const newSchoolRef = await firestore.collection("schools").add({
         UserId: userId,
         schoolName,
         schoolLocation,
         schoolDescription,
         schoolImage,
+        managers: managers || [],
       });
 
-      res.status(201).json(newSchool);
+      res.status(201).json(newSchoolRef);
     } catch (error) {
       console.error(error);
       res
@@ -47,52 +48,299 @@ router.post(
   }
 );
 
-router.get("/all", checkRole("SCH"), async (req, res) => {
+router.get("/all", checkRole(["Admin", "SCH"]), async (req, res) => {
   try {
     const userId = req.user.id;
-    const schools = await School.findAll({ where: { UserId: userId } });
+    const rolesArray = [
+      { id: 1, roleName: "Admin" },
+      { id: 2, roleName: "Manager" },
+      { id: 3, roleName: "User" },
+      // Add more roles as needed
+    ];
+
+    // Query schools where the user is listed as a manager with a specific role or is the owner
+    const schoolsSnapshot = await firestore
+      .collection("schools")
+      .where(
+        Filter.or(
+          // Check for the user as a manager with a specific role
+          ...rolesArray.map((role) =>
+            Filter.where("managers", "array-contains", {
+              userId: userId,
+              role: role.roleName,
+            })
+          ),
+          // Check for the user as the owner
+          Filter.where("UserId", "==", userId)
+        )
+      )
+      .get();
+
+    const schools = [];
+    schoolsSnapshot.forEach((doc) => {
+      schools.push({
+        id: doc.id,
+        ...doc.data(),
+      });
+    });
+
     res.status(200).json(schools);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 router.get("/detail/:schoolId", async (req, res) => {
   try {
     const schoolId = req.params.schoolId;
     const { year } = req.query;
-    // Find all majors in the school
-    const majors = await Major.findAll({ where: { SchoolId: schoolId } });
 
-    // Extract an array of major IDs
-    const majorIds = majors.map((major) => major.id);
+    // Fetch majors under the given school
+    const majorsSnapshot = await firestore
+      .collection("majors")
+      .where("SchoolId", "==", schoolId)
+      .get();
 
-    // Find all students in the majors
-    const studentsInSchool = await User.findAll({
-      where: {
-        MajorId: majorIds,
-        createdAt: {
-          [Op.between]: [new Date(`${year}-01-01`), new Date(`${year}-12-31`)],
-        },
-      },
-      attributes: { exclude: ["password"] },
-      include: [{ model: Major }],
-    });
-    if (!studentsInSchool || studentsInSchool.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "No students found in this major for the given year" });
+    // Extract major IDs
+    const majorIds = majorsSnapshot.docs.map((doc) => doc.id);
+    if (majorIds.length === 0) {
+      return res.status(404).json({
+        error:
+          "No majors found for the school , Please create Major for this school",
+      });
     }
+    // Fetch students in majors under the given school for the given year
+    const studentsQuery = await firestore
+      .collection("users")
+      .where("MajorId", "in", majorIds)
+      .where("userDate", ">=", new Date(`${year}-01-01`))
+      .where("userDate", "<=", new Date(`${year}-12-31`))
+      .get();
+
+    const studentsInSchool = [];
+
+    for (const doc of studentsQuery.docs) {
+      const data = doc.data();
+      delete data.password;
+      delete data.expo_push_token;
+
+      const majorId = data.MajorId;
+
+      // Fetch major data using majorId
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .doc(majorId)
+        .get();
+      const majorData = majorSnapshot.data();
+
+      studentsInSchool.push({
+        id: doc.id,
+        Major: majorData,
+        ...data,
+      });
+    }
+
+    if (studentsInSchool.length === 0) {
+      return res.status(404).json({
+        error: "No students found in this major for the given year",
+      });
+    }
+
     res.status(200).json(studentsInSchool);
   } catch (error) {
+    console.error(error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-router.get("/allschool", async (req, res) => {
+router.get("/allschool", checkRole(["Admin", "KTX"]), async (req, res) => {
   try {
-    const allSchool = await School.findAll();
+    const allSchoolSnapshot = await firestore.collection("schools").get();
+    const allSchool = [];
+    allSchoolSnapshot.forEach((doc) => {
+      allSchool.push({
+        id: doc.id,
+        ...doc.data(),
+      });
+    });
     res.status(200).json(allSchool);
-  } catch (error) {}
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
+router.get("/all/student/:schoolId", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const schoolId = req.params.schoolId;
+    const year = req.query.year;
+
+    // Fetch all majors in the specified school
+    const majorsSnapshot = await firestore
+      .collection("majors")
+      .where("SchoolId", "==", schoolId)
+      .get();
+    // Get major IDs for the fetched majors
+    const majorIds = majorsSnapshot.docs.map((doc) => doc.id);
+    // If there are no major IDs, return an error
+    if (majorIds.length === 0) {
+      return res.status(404).json({
+        error:
+          "No majors found for the school , Please create Major for this school",
+      });
+    }
+    // Fetch all students in the majors for the specified year
+    const studentsSnapshot = await firestore
+      .collection("users")
+      .where("MajorId", "in", majorIds)
+      .where("userDate", ">=", new Date(`${year}-01-01`))
+      .where("userDate", "<=", new Date(`${year}-12-31`))
+      .get();
+
+    const studentsData = await Promise.all(
+      studentsSnapshot.docs.map(async (doc) => {
+        const data = doc.data();
+        delete data.password;
+        delete data.expo_push_token;
+
+        // Fetch major information
+        const majorDoc = await firestore
+          .collection("majors")
+          .doc(data.MajorId)
+          .get();
+        const majorData = majorDoc.data();
+
+        // Fetch school information
+        const schoolDoc = await firestore
+          .collection("schools")
+          .doc(schoolId)
+          .get();
+        const schoolData = schoolDoc.data();
+
+        return {
+          id: doc.id,
+          ...data,
+          Major: {
+            id: majorDoc.id,
+            ...majorData,
+            School: {
+              id: schoolId,
+              ...schoolData,
+            },
+          },
+        };
+      })
+    );
+
+    if (studentsData.length === 0) {
+      return res.status(404).json({ error: "No student found for the year" });
+    }
+
+    res.status(200).json(studentsData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.put(
+  "/update/:schoolId/managers",
+  checkRole(["Admin"]),
+  async (req, res) => {
+    try {
+      const { userId, role } = req.body;
+      const { schoolId } = req.params;
+      const currentTime = new Date().toISOString();
+
+      // Check if the user ID is valid
+      const userSnapshot = await firestore
+        .collection("users")
+        .doc(userId)
+        .get();
+      if (!userSnapshot.exists) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Update managers for the school
+      await firestore
+        .collection("schools")
+        .doc(schoolId)
+        .update({
+          managers: admin.firestore.FieldValue.arrayUnion({ userId, role }),
+          updatedAt: currentTime,
+        });
+
+      res.status(200).json({ message: "Managers updated successfully." });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({
+        error: "Internal server error. Failed to update managers.",
+      });
+    }
+  }
+);
+
+router.put(
+  "/remove/:schoolId/manager",
+  checkRole(["Admin"]),
+  async (req, res) => {
+    try {
+      const { userId, role } = req.body;
+      const { schoolId } = req.params;
+      const currentTime = new Date().toISOString();
+
+      // Check if the user ID is valid
+      const userSnapshot = await firestore
+        .collection("users")
+        .doc(userId)
+        .get();
+      if (!userSnapshot.exists) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Remove the manager from the school's managers array
+      await firestore
+        .collection("schools")
+        .doc(schoolId)
+        .update({
+          managers: admin.firestore.FieldValue.arrayRemove({ userId, role }),
+          updatedAt: currentTime,
+        });
+
+      res.status(200).json({ message: "Manager removed successfully." });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({
+        error: "Internal server error. Failed to remove manager.",
+      });
+    }
+  }
+);
+router.delete("/remove/:schoolId", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const { schoolId } = req.params;
+
+    // Check if the school exists
+    const schoolDoc = await firestore.collection("schools").doc(schoolId).get();
+    if (!schoolDoc.exists) {
+      return res.status(404).json({ error: "School not found." });
+    }
+    // Delete majors associated with the school
+    await deleteMajorsAndClearUsers(schoolId);
+
+    // Delete the school document
+    await firestore.collection("schools").doc(schoolId).delete();
+
+    res
+      .status(200)
+      .json({ message: "School and associated data removed successfully." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      error:
+        "Internal server error. Failed to remove school and associated data.",
+    });
+  }
+});
 module.exports = router;

@@ -1,215 +1,381 @@
 const express = require("express");
-const Message = require("../models/Message");
-const User = require("../models/User");
-const { Op, json } = require("sequelize");
 const { checkRole } = require("../middleware/authenticateToken");
-const { getReceiverSocketId, io } = require("../sockets/sockets");
-const sendPushNotifications = require("../utils/sendPushNotifications");
+const { firestore } = require("../firebase/firebase");
 const router = express.Router();
+const admin = require("firebase-admin");
+const sendPushNotifications = require("../utils/sendPushNotifications");
 // Route to create a new message
 router.post(
   "/create",
-  checkRole(["KTX", "SCH", "STUDENT"]),
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
   async (req, res) => {
-    const { content, file, image, video, sticker, receiverId } = req.body;
+    const { content, receiverId } = req.body;
     const senderId = req.user.id;
+    const receiverRef = await firestore.collection("users").doc(receiverId);
     try {
-      const newMessage = await Message.create({
-        file,
-        image,
-        video,
-        sticker,
-        content,
-        sender_id: senderId,
-        receiver_id: receiverId,
+      // Check if a conversation between the sender and receiver already exists
+      const conversationsSnapshot = await firestore
+        .collection("conversations")
+        .where("participants", "array-contains", senderId)
+        .get();
+
+      let conversationRef;
+      let conversationId;
+
+      // Find an existing conversation where both users are participants
+      conversationsSnapshot.forEach((conversationDoc) => {
+        const participants = conversationDoc.data().participants;
+
+        // Check if receiverRef is included in the participants' references
+        const receiverIsParticipant = participants.some((participant) => {
+          return participant === receiverId;
+        });
+
+        if (receiverIsParticipant) {
+          // If receiver is a participant, set conversationRef to the current conversation
+          conversationRef = conversationDoc.ref;
+          conversationId = conversationDoc.id;
+        }
       });
 
-      const MessageWithSender = await Message.findByPk(newMessage.id, {
-        include: [
-          {
-            model: User,
-            as: "sender", // Alias for sender
-            attributes: ["id", "firstName", "lastName", "avatar"],
-          },
-          {
-            model: User,
-            as: "receiver", // Alias for receiver
-            attributes: ["id", "firstName", "lastName", "avatar"],
-          },
-        ],
-      });
+      if (conversationRef) {
+        // If conversation exists, send the message to the existing conversation
+        const messageRef = await firestore.collection("messages").add({
+          content,
+          SenderId: senderId,
+          ReceiverId: receiverId,
+          ConversationId: conversationId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          seenBySender: true,
+          seenByReceiver: false,
+        });
 
-      const user =
-        senderId === MessageWithSender.sender.id
-          ? MessageWithSender.sender
-          : MessageWithSender.receiver;
+        // Update the lastMessage and lastMessageTime fields in the conversation
+        await conversationRef.update({
+          lastMessage: content,
+          lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        // Get receiver's tokenIds for push notification
+        const receiverSnapshot = await receiverRef.get();
+        const receiverData = receiverSnapshot.data();
+        const expo_push_token = receiverData.expo_push_token || [];
+        // Send push notifications to receiver
+        await sendPushNotifications(
+          [expo_push_token],
+          "New Chat Message",
+          "You have received a new chat message",
+          receiverSnapshot.id,
+          "chat"
+        );
 
-      const formatMessage = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        avatar: user.avatar,
-        lastMessage: newMessage.content,
-        sendDate: newMessage.createdAt,
-        sender_id: newMessage.sender_id,
-        receiver_id: newMessage.receiver_id,
-        seen_by_user1: false,
-        seen_by_user2: false,
-      };
+        res.status(201).json({
+          message: "Message sent successfully",
+          messageId: messageRef.id,
+          conversationId: conversationRef,
+        });
+      } else {
+        // If conversation doesn't exist, create a new conversation
+        const newConversationRef = await firestore
+          .collection("conversations")
+          .add({
+            participants: [senderId, receiverId],
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastMessage: content,
+            lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
+          });
 
-      const findReceiver = await User.findAll({
-        where: { id: receiverId },
-        attributes: ["expo_push_token"],
-      });
-      await sendPushNotifications(
-        findReceiver.map((user) => user.expo_push_token),
-        (description = "lihou"),
-        content
-      );
-      // SOCKET IO FUNCTIONALITY WILL GO HERE
-      const receiverSocketId = getReceiverSocketId(receiverId);
-      if (receiverSocketId) {
-        // io.to(<socket_id>).emit() used to send events to specific client
-        io.to(receiverSocketId).emit("newMessage", newMessage);
-        io.to(receiverSocketId).emit("listMessage", formatMessage);
+        // Send the message to the new conversation
+        const messageRef = await firestore.collection("messages").add({
+          content,
+          SenderId: senderId,
+          ReceiverId: receiverId,
+          ConversationId: newConversationRef.id,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          seenBySender: true,
+          seenByReceiver: false,
+        });
+        // Get receiver's tokenIds for push notification
+        const receiverSnapshot = await receiverRef.get();
+        const receiverData = receiverSnapshot.data();
+        const expo_push_token = receiverData.expo_push_token || [];
+
+        // Send push notifications to receiver
+        await sendPushNotifications(
+          [expo_push_token],
+          "New Chat Message",
+          "You have received a new chat message",
+          receiverSnapshot.id,
+          "chat"
+        );
+
+        res.status(201).json({
+          message: "Message sent successfully",
+          messageId: messageRef.id,
+          conversationId: newConversationRef.id,
+        });
       }
-      res.status(201).json(newMessage);
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server Error" });
     }
   }
 );
-// Route to fetch all messages between two specific users
+
+// router.get(
+//   "/all/:receiverId",
+//   checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+//   async (req, res) => {
+//     const { receiverId } = req.params;
+//     const senderId = req.user.id;
+
+//     try {
+//       // Query conversations where senderId is a participant
+//       const senderConversations = await firestore
+//         .collection("conversations")
+//         .where(
+//           "participants",
+//           "array-contains",
+//           firestore.collection("users").doc(senderId)
+//         )
+//         .get();
+
+//       // Filter conversations to find the one involving receiverId
+//       const conversationSnapshot = senderConversations.docs.find(
+//         (conversation) => {
+//           const participants = conversation.data().participants;
+//           const senderIncluded = participants.some(
+//             (participant) => participant.id === senderId
+//           );
+//           const receiverIncluded = participants.some(
+//             (participant) => participant.id === receiverId
+//           );
+//           return senderIncluded && receiverIncluded;
+//         }
+//       );
+
+//       if (!conversationSnapshot) {
+//         // No conversation found, return an empty response
+//         return res.status(200).json({ messages: [], receiver: null });
+//       }
+
+//       // Conversation found, retrieve messages
+//       const conversationId = conversationSnapshot.ref;
+//       const messagesSnapshot = await firestore
+//         .collection("messages")
+//         .where("ConversationId", "==", conversationId)
+//         .orderBy("createdAt", "desc")
+//         .get();
+
+//       const messages = [];
+//       const receiverSnapshot = await firestore
+//         .collection("users")
+//         .doc(receiverId)
+//         .get();
+//       const receiverData = receiverSnapshot.data();
+
+//       // Update seenByReceiver status for each message
+//       for (const doc of messagesSnapshot.docs) {
+//         const messageData = doc.data();
+//         const seenByReceiver =
+//           messageData.ReceiverId.id === receiverId
+//             ? messageData.seenByReceiver
+//             : true; // Assume sender always sees their own messages
+
+//         // Update seenByReceiver status in Firestore
+//         if (!seenByReceiver && messageData.ReceiverId.id === receiverId) {
+//           await doc.ref.update({ seenByReceiver: true });
+//         }
+
+//         messages.push({
+//           id: doc.id,
+//           content: messageData.content,
+//           SenderId: messageData.SenderId,
+//           ReceiverId: messageData.ReceiverId,
+//           ConversationId: messageData.ConversationId,
+//           createdAt: messageData.createdAt,
+//           seenBySender: messageData.seenBySender,
+//           seenByReceiver: seenByReceiver,
+//         });
+//       }
+
+//       res.status(200).json({
+//         messages: messages,
+//         receiver: {
+//           id: receiverSnapshot.id,
+//           firstName: receiverData.firstName,
+//           lastName: receiverData.lastName,
+//           avatar: receiverData.avatar,
+//         },
+//       });
+//     } catch (error) {
+//       console.error(error);
+//       res.status(500).json({ message: "Server Error" });
+//     }
+//   }
+// );
 router.get(
-  "/all/:receiverId",
-  checkRole(["STUDENT", "SCH", "KTX"]),
+  "/receiver/:receiverId",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
   async (req, res) => {
     const { receiverId } = req.params;
-    const senderId = req.user.id;
+
     try {
-      const messages = await Message.findAll({
-        where: {
-          [Op.or]: [
-            {
-              sender_id: receiverId,
-              receiver_id: senderId,
-            },
-            {
-              sender_id: senderId,
-              receiver_id: receiverId,
-            },
-          ],
-        },
-      });
-      res.json(messages);
+      const receiverSnapshot = await firestore
+        .collection("users")
+        .doc(receiverId)
+        .get();
+      if (!receiverSnapshot.exists) {
+        return res.status(404).json({ message: "Receiver not found" });
+      }
+
+      const receiverData = receiverSnapshot.data();
+      const receiver = {
+        id: receiverSnapshot.id,
+        firstName: receiverData.firstName,
+        lastName: receiverData.lastName,
+        avatar: receiverData.avatar,
+        // Add any other fields you need
+      };
+
+      res.status(200).json({ receiver });
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server Error" });
     }
   }
 );
+
 router.get(
   "/users-with-conversations",
-  checkRole(["KTX", "SCH", "STUDENT"]),
+  checkRole(["Admin", "STUDENT", "SCH", "KTX"]),
   async (req, res) => {
-    const userId = req.user.id;
     try {
-      // Find all messages sent or received by the user
-      const userMessages = await Message.findAll({
-        where: {
-          [Op.or]: [{ sender_id: userId }, { receiver_id: userId }],
-        },
-        attributes: [
-          "sender_id",
-          "receiver_id",
-          "createdAt",
-          "content",
-          "seen_by_user1",
-          "seen_by_user2",
-        ],
-        order: [["createdAt", "DESC"]],
+      const usersWithConversations = [];
+
+      const conversationsSnapshot = await firestore
+        .collection("conversations")
+        .get();
+      const userIds = new Set();
+
+      conversationsSnapshot.forEach((conversationDoc) => {
+        const conversationData = conversationDoc.data();
+        conversationData.participants.forEach((participantRef) => {
+          userIds.add(participantRef.id);
+        });
       });
 
-      // Create a set to store unique user IDs involved in conversations with the user
-      const uniqueUserIds = new Set();
+      const promises = Array.from(userIds).map(async (userId) => {
+        if (userId !== req.user.id) {
+          const userDataSnapshot = await firestore
+            .collection("users")
+            .doc(userId)
+            .get();
+          const userData = userDataSnapshot.data();
 
-      // Loop through userMessages to collect unique user IDs
-      userMessages.forEach((message) => {
-        if (message.sender_id !== userId) {
-          uniqueUserIds.add(message.sender_id);
+          const userConversationsSnapshot = await firestore
+            .collection("conversations")
+            .where(
+              "participants",
+              "array-contains",
+              firestore.doc(`users/${userId}`)
+            )
+            .get();
+
+          const conversations = [];
+
+          for (const conversationDoc of userConversationsSnapshot.docs) {
+            const conversationData = conversationDoc.data();
+            const conversationId = conversationDoc.id;
+
+            const lastMessageSnapshot = await firestore
+              .collection("messages")
+              .where(
+                "ConversationId",
+                "==",
+                firestore.doc(`conversations/${conversationId}`)
+              )
+              .orderBy("createdAt", "desc")
+              .limit(1)
+              .get();
+
+            let hasSeenMessage = false;
+            lastMessageSnapshot.forEach((messageDoc) => {
+              const messageData = messageDoc.data();
+              if (
+                messageData.ReceiverId.id === userId &&
+                messageData.seenByReceiver
+              ) {
+                hasSeenMessage = true;
+              }
+            });
+
+            conversations.push({
+              id: conversationId,
+              participants: conversationData.participants,
+              createdAt: conversationData.createdAt,
+              lastMessage: conversationData.lastMessage,
+              lastMessageTime: conversationData.lastMessageTime,
+              hasSeenMessage: hasSeenMessage,
+            });
+          }
+
+          usersWithConversations.push({
+            id: userId,
+            firstName: userData.firstName,
+            lastName: userData.lastName,
+            avatar: userData.avatar,
+            conversations: conversations,
+          });
         }
-        if (message.receiver_id !== userId) {
-          uniqueUserIds.add(message.receiver_id);
-        }
       });
 
-      // Fetch users corresponding to the unique user IDs
-      const usersWithConversations = await User.findAll({
-        where: { id: [...uniqueUserIds] },
-        attributes: ["id", "firstName", "lastName", "avatar"],
-      });
+      await Promise.all(promises);
 
-      // Enhance each user with the last message content and time
-      const usersWithLastMessage = usersWithConversations.map((user) => {
-        const lastMessage = userMessages.find(
-          (message) =>
-            (message.receiver_id === user.id && message.sender_id === userId) ||
-            (message.sender_id === user.id && message.receiver_id === userId)
-        );
-        return {
-          id: user.id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          avatar: user.avatar,
-          lastMessage: lastMessage ? lastMessage.content : null,
-          sendDate: lastMessage ? lastMessage.createdAt : null,
-          seen_by_user1: lastMessage ? lastMessage.seen_by_user1 : null,
-          seen_by_user2: lastMessage ? lastMessage.seen_by_user2 : null,
-          sender_id: lastMessage ? lastMessage.sender_id : null,
-          receiver_id: lastMessage ? lastMessage.receiver_id : null,
-        };
-      });
-      // Emit real-time event to the client with the list of users
-      const receiverSocketId = getReceiverSocketId(userId);
-      if (receiverSocketId) {
-        io.to(receiverSocketId).emit(
-          "usersWithConversations",
-          usersWithLastMessage
-        );
-      }
-      res.status(200).json(usersWithLastMessage);
+      res.status(200).json(usersWithConversations);
     } catch (error) {
       console.error(error);
       res.status(500).json({ message: "Server Error" });
     }
   }
 );
+
 router.put(
   "/update-status-seen/:messageId",
   checkRole(["KTX", "SCH", "STUDENT"]),
   async (req, res) => {
+    const { messageId } = req.params;
+    const receiverId = req.user.id;
     try {
-      const messageId = req.params.messageId;
-      const userId = req.user.id;
-      const message = await Message.findByPk(messageId);
-      if (message.sender_id === userId) {
-        // Update seen_by_user1
-        await message.update({ seen_by_user1: true });
-      } else if (message.receiver_id === userId) {
-        // Update seen_by_user2
-        await message.update({ seen_by_user2: true });
-      } else {
-        return res.status(403).send("Unauthorized");
+      const messageRef = firestore.collection("messages").doc(messageId);
+      const messageSnapshot = await messageRef.get();
+
+      // Check if the message exists
+      if (!messageSnapshot.exists) {
+        return res.status(404).json({ message: "Message not found" });
       }
 
-      res.sendStatus(200);
+      const messageData = messageSnapshot.data();
+
+      // Check if the message belongs to the receiver
+      if (messageData.ReceiverId !== receiverId) {
+        return res
+          .status(403)
+          .json({ message: "You are not authorized to update this message" });
+      }
+
+      // Update seen by receiver to true
+      await messageRef.update({
+        seenByReceiver: true,
+      });
+
+      res.status(200).json({ message: "Message seen by receiver" });
     } catch (error) {
-      console.error("Error updating message status:", error);
-      res.sendStatus(500);
+      console.error(error);
+      res.status(500).json({ message: "Server Error" });
     }
   }
 );
+
 router.get("/number-message", checkRole(["STUDENT"]), async (req, res) => {
   try {
     const userId = req.user.id;

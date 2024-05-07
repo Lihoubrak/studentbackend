@@ -1,138 +1,70 @@
 const express = require("express");
-const Notification = require("../models/Notification");
-const ExpoNotifications = require("../models/ExpoNotifications");
 const { checkRole } = require("../middleware/authenticateToken");
-const Room = require("../models/Room");
-const User = require("../models/User");
-const { Op, where } = require("sequelize");
-const Major = require("../models/Major");
 const router = express.Router();
+const admin = require("firebase-admin");
+const { firestore } = require("../firebase/firebase");
 const sendPushNotifications = require("../utils/sendPushNotifications");
-const Role = require("../models/Role");
-const { getReceiverSocketId, io } = require("../sockets/sockets");
 router.post("/send", checkRole(["KTX", "SCH"]), async (req, res) => {
   try {
+    const { description, content, type, notificationTo } = req.body;
     const userId = req.user.id;
-    const { description, content, file, type, notificationTo } = req.body;
-    const newNotification = await Notification.create({
+    const sentAt = admin.firestore.FieldValue.serverTimestamp();
+
+    // Create a new notification document in Firestore
+    const newNotificationRef = await firestore.collection("notifications").add({
       description,
       content,
-      file,
       type,
-      UserId: userId,
+      sentBy: userId,
+      sentAt,
+      recipients: [], // Initialize recipients array
     });
-    // Fetch the newly created notification with associated user and role
-    const notificationWithUser = await Notification.findByPk(
-      newNotification.id,
-      {
-        include: [
-          {
-            model: User,
-            attributes: ["id", "firstName", "lastName", "avatar"],
-            include: {
-              model: Role,
-              attributes: ["roleName"],
-            },
-          },
-        ],
-      }
-    );
-    // Format the response as desired
-    const formattedNotification = {
-      isSeen: false,
-      Notification: {
-        id: notificationWithUser.id,
-        description: notificationWithUser.description,
-        content: notificationWithUser.content,
-        file: notificationWithUser.file,
-        type: notificationWithUser.type,
-        createdAt: notificationWithUser.createdAt,
-        updatedAt: notificationWithUser.updatedAt,
-        UserId: notificationWithUser.UserId,
-        User: {
-          id: notificationWithUser.User.id,
-          firstName: notificationWithUser.User.firstName,
-          lastName: notificationWithUser.User.lastName,
-          avatar: notificationWithUser.User.avatar,
-          Role: {
-            roleName: notificationWithUser.User.Role.roleName,
-          },
-        },
-      },
-    };
 
-    let AllIds;
-    let tokenIds;
+    let userSnapshot;
 
     if (type === "Dorms") {
-      AllIds = await Room.findAll({
-        where: { DormitoryId: notificationTo },
-      });
-      if (AllIds.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "No rooms found for the given notificationTo" });
-      }
-      tokenIds = await User.findAll({
-        attributes: ["expo_push_token", "id"],
-        where: { RoomId: { [Op.in]: AllIds.map((room) => room.id) } },
-      });
-      if (tokenIds.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "No users found for the given roomIds" });
-      }
+      const roomSnapshot = await firestore
+        .collection("rooms")
+        .where("DormitoryId", "==", notificationTo)
+        .get();
+      const roomIds = roomSnapshot.docs.map((doc) => doc.id);
+      userSnapshot = await firestore
+        .collection("users")
+        .where("RoomId", "in", roomIds)
+        .get();
     } else if (type === "Univ") {
-      AllIds = await Major.findAll({
-        where: { SchoolId: notificationTo },
-      });
-      if (AllIds.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "No major found for the given notificationTo" });
-      }
-      tokenIds = await User.findAll({
-        attributes: ["expo_push_token", "id"],
-        where: { MajorId: { [Op.in]: AllIds.map((major) => major.id) } },
-      });
-      if (tokenIds.length === 0) {
-        return res
-          .status(404)
-          .json({ error: "No users found for the given majorIds" });
-      }
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .where("SchoolId", "==", notificationTo)
+        .get();
+      const majorIds = majorSnapshot.docs.map((doc) => doc.id);
+      userSnapshot = await firestore
+        .collection("users")
+        .where("MajorId", "in", majorIds)
+        .get();
     }
 
-    const notificationsToStore = tokenIds.map((user) => {
-      if (user.expo_push_token) {
-        return {
-          expo_push_token: user.expo_push_token,
-          sent_at: new Date(),
-          NotificationId: newNotification.id,
-        };
-      }
-      return null;
+    // Construct an array of recipient objects containing user references and isSeen field
+    const recipientsData = userSnapshot.docs.map((doc) => ({
+      userId: doc.id,
+      isSeen: false,
+    }));
+
+    // Update recipients array in the notification document with recipient objects
+    await newNotificationRef.update({
+      recipients: recipientsData,
     });
 
-    // Emit Socket.IO events to specific clients (users)
-    tokenIds.forEach((user) => {
-      const receiverSocketId = getReceiverSocketId(user.id);
-      if (receiverSocketId) {
-        // Emit event only if socket ID is available
-        io.to(receiverSocketId).emit("newNotification", formattedNotification);
-      } else {
-        console.log(
-          `Socket ID not found for user ${user.id}. Skipping notification.`
-        );
-      }
-    });
-    await ExpoNotifications.bulkCreate(notificationsToStore);
-    // Step 3: Send push notifications
+    // Send push notifications
+    const tokens = userSnapshot.docs.map((doc) => doc.data().expo_push_token);
     await sendPushNotifications(
-      tokenIds.map((user) => user.expo_push_token),
+      tokens.filter(Boolean),
       description,
-      content
+      content,
+      newNotificationRef.id,
+      "notification"
     );
-    res.status(201).json(formattedNotification);
+    res.status(201).json({ message: "Notification sent successfully" });
   } catch (error) {
     console.error("Error sending notification:", error);
     res
@@ -144,66 +76,81 @@ router.post("/send", checkRole(["KTX", "SCH"]), async (req, res) => {
 router.get("/all", checkRole(["STUDENT"]), async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findByPk(userId);
-    const allNotificationsForUser = await ExpoNotifications.findAll({
-      where: { expo_push_token: user.expo_push_token },
-      attributes: ["isSeen"],
-      include: {
-        model: Notification,
-        include: {
-          model: User,
-          attributes: ["id", "firstName", "lastName", "avatar"],
-          include: {
-            model: Role,
-            attributes: ["roleName"],
-          },
-        },
-      },
+    // Get all notifications
+    const userNotificationsSnapshot = await firestore
+      .collection("notifications")
+      .get();
+
+    // Filter notifications where the userRef exists in recipients array
+    const userNotifications = [];
+    userNotificationsSnapshot.forEach((doc) => {
+      const data = doc.data();
+      // Check if the userId matches any recipient's userId
+      if (data.recipients.some((recipient) => recipient.userId === userId)) {
+        userNotifications.push({
+          id: doc.id,
+          data: data,
+        });
+      }
     });
-    res.status(200).json(allNotificationsForUser);
+
+    res.status(200).json(userNotifications);
   } catch (error) {
     console.error("Error fetching notifications:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-router.get("/detail/:notificationId", async (req, res) => {
-  try {
-    const notificationId = req.params.notificationId;
-    const notification = await Notification.findOne({
-      where: { id: notificationId },
-      include: { model: User, attributes: ["firstName", "lastName"] },
-    });
-
-    res.status(200).json(notification);
-  } catch (error) {}
-});
-
-router.put(
-  "/user-seen-notification/:notificationId",
-  checkRole(["STUDENT"]),
+router.get(
+  "/detail/:notificationId",
+  checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
   async (req, res) => {
     try {
-      const userId = req.user.id;
       const notificationId = req.params.notificationId;
-      const user = await User.findOne({
-        where: { id: userId },
-        attributes: ["id", "expo_push_token"],
-      });
-      await ExpoNotifications.update(
-        { isSeen: true },
-        {
-          where: {
-            [Op.and]: [
-              { expo_push_token: user.expo_push_token },
-              { NotificationId: notificationId },
-            ],
-          },
-        }
+      const userId = req.user.id;
+      // Reference the notification document in Firestore
+      const notificationRef = firestore
+        .collection("notifications")
+        .doc(notificationId);
+
+      // Get the notification document
+      const doc = await notificationRef.get();
+
+      // Check if the document exists
+      if (!doc.exists) {
+        res.status(404).json({ error: "Notification not found" });
+        return;
+      }
+
+      // Extract notification data
+      const notificationData = doc.data();
+
+      // Find the recipient with the current user's ID
+      const recipientIndex = notificationData.recipients.findIndex(
+        (recipient) => recipient.userId === userId
       );
-      res.sendStatus(200);
+
+      // Check if the recipient exists in the recipients array
+      if (recipientIndex === -1) {
+        res
+          .status(404)
+          .json({ error: "You are not a recipient of this notification" });
+        return;
+      }
+
+      // Update the isSeen flag for the recipient
+      notificationData.recipients[recipientIndex].isSeen = true;
+
+      // Update the notification document in Firestore with the modified data
+      await notificationRef.update({ recipients: notificationData.recipients });
+
+      // Return the updated notification details
+      res.status(200).json({
+        id: doc.id,
+        data: notificationData,
+      });
     } catch (error) {
-      console.error("Error marking notifications as seen:", error);
+      console.error("Error fetching notification:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   }
@@ -211,16 +158,17 @@ router.put(
 router.get("/number-notification", checkRole("STUDENT"), async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findByPk(userId);
-    const numberNotificationNotYetSeen = await ExpoNotifications.count({
-      where: {
-        [Op.and]: [
-          { isSeen: false },
-          { expo_push_token: user.expo_push_token },
-        ],
-      },
-    });
-    res.status(200).json({ count: numberNotificationNotYetSeen });
+
+    // Get all notifications where the userRef matches any recipient's userRef and isSeen is false
+    const userNotificationsSnapshot = await firestore
+      .collection("notifications")
+      .where("recipients", "array-contains", { userId, isSeen: false })
+      .get();
+
+    // Get the count of notifications
+    const count = userNotificationsSnapshot.size;
+
+    res.status(200).json({ count });
   } catch (error) {
     console.error("Error fetching number of notifications:", error);
     res.status(500).json({ error: "Internal Server Error" });

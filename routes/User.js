@@ -1,13 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
-const User = require("../models/User");
 const { generateToken, checkRole } = require("../middleware/authenticateToken");
-const Room = require("../models/Room");
-const Dormitory = require("../models/Dormitory");
-const Role = require("../models/Role");
-const Major = require("../models/Major");
-const School = require("../models/School");
-const { Op } = require("sequelize");
+const { firestore, fireauth } = require("../firebase/firebase");
 const router = express.Router();
 router.post("/register", async (req, res) => {
   try {
@@ -17,7 +11,7 @@ router.post("/register", async (req, res) => {
       confirmPassword,
       firstName,
       lastName,
-      age,
+      birthday,
       nationality,
       gender,
       email,
@@ -27,54 +21,125 @@ router.post("/register", async (req, res) => {
       avatar,
       expo_push_token,
       room,
+      degree,
       major,
       schoolId,
       dormitoryId,
+      year,
     } = req.body;
+    // Validate required fields
+    if (!username || !email || !password) {
+      return res
+        .status(400)
+        .json({ error: "Username, email, and password are required." });
+    }
     if (password !== confirmPassword) {
       return res.status(400).json({ error: "Passwords do not match." });
     }
-    // Check if username already exists
-    const existingUser = await User.findOne({ where: { username: username } });
-    if (existingUser) {
-      return res.status(400).json({ error: "Username already exists." });
-    }
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    // Get Room and Major IDs
-    const roomInstance = await Room.findOne({
-      where: { roomNumber: String(room), DormitoryId: dormitoryId },
-    });
-    if (!roomInstance) {
-      return res.status(400).json({ error: "Room not found." });
-    }
-    const majorInstance = await Major.findOne({
-      where: { majorName: String(major), SchoolId: schoolId },
-    });
-    if (!majorInstance) {
-      return res.status(400).json({ error: "Major not found." });
+
+    // Check if the email already exists in Firebase Authentication
+    // const userRecordByEmail = await fireauth.getUserByEmail(email);
+    // if (userRecordByEmail) {
+    //   return res
+    //     .status(400)
+    //     .json({ error: "Email address is already in use." });
+    // }
+
+    // Check if the username already exists in Firestore
+    const userRecordByUsername = await firestore
+      .collection("users")
+      .where("username", "==", username)
+      .get();
+    if (!userRecordByUsername.empty) {
+      return res.status(400).json({ error: "Username is already in use." });
     }
 
-    // Create new user
-    const newUser = await User.create({
+    // Create the user in Firebase Authentication
+    const authUser = await fireauth.createUser({
+      email,
+      password,
+    });
+    const userId = authUser.uid;
+    // Hash the password (if needed)
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Get Room and Major IDs
+    const roomSnapshot = await firestore
+      .collection("rooms")
+      .where("roomNumber", "==", String(room))
+      .where("DormitoryId", "==", dormitoryId)
+      .limit(1) // Retrieve at most one matching room document
+      .get();
+
+    const dormrSnapshot = await firestore
+      .collection("majors")
+      .where("majorName", "==", String(major))
+      .where("SchoolId", "==", schoolId)
+      .limit(1) // Retrieve at most one matching dormitory document
+      .get();
+
+    const roomReference = roomSnapshot.docs[0] ? roomSnapshot.docs[0].id : null;
+    const dormitoryReference = dormrSnapshot.docs[0]
+      ? dormrSnapshot.docs[0].id
+      : null;
+
+    // // Handle room not found
+    // if (roomSnapshot.empty) {
+    //   return res.status(400).json({
+    //     error:
+    //       "Room not found. Please verify the room number or contact administration.",
+    //   });
+    // }
+    // // // Handle major not found
+    // if (dormrSnapshot.empty) {
+    //   return res.status(400).json({
+    //     error:
+    //       "Major not found. Please verify the major name or contact administration.",
+    //   });
+    // }
+    let roleStudentId;
+    const roleStudentSnapshot = await firestore
+      .collection("roles")
+      .where("roleName", "==", "STUDENT")
+      .get();
+
+    if (!roleStudentSnapshot.empty) {
+      const roleStudentDoc = roleStudentSnapshot.docs[0];
+      roleStudentId = roleStudentDoc.id;
+    } else {
+      console.log("No role with roleName 'STUDENT' found.");
+    }
+    // Create new user object
+    const newUser = {
       username,
       password: hashedPassword,
-      RoleId: 3,
-      MajorId: majorInstance.id,
-      RoomId: roomInstance.id,
+      degree,
+      year,
+      RoleId: roleStudentId,
+      MajorId: dormitoryReference,
+      RoomId: roomReference,
       firstName,
       lastName,
-      age,
+      birthday,
       nationality,
       gender,
       email,
       phoneNumber,
       facebook,
       zalo,
-      avatar,
-      expo_push_token,
-    });
-    res.status(201).json(newUser);
+      status: true,
+      graduate: false,
+      leftRoomYear: new Date().getFullYear(),
+      avatar:
+        gender === "Male"
+          ? `${req.protocol}://${req.get("host")}/boy.png`
+          : `${req.protocol}://${req.get("host")}/human.png`,
+      expo_push_token: expo_push_token || null,
+      userDate: new Date(),
+    };
+    // Create user document in Firestore (implementation omitted for brevity)
+    await firestore.collection("users").doc(userId).set(newUser);
+    res.status(201).json({ message: "User registered successfully." });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Internal server error." });
@@ -90,22 +155,63 @@ router.post("/login", async (req, res) => {
         .json({ error: "Username and password are required." });
     }
 
-    const user = await User.findOne({
-      where: { username: username },
-      include: { model: Role },
-    });
+    // Fetch user credentials from Firestore
+    const userSnapshot = await firestore
+      .collection("users")
+      .where("username", "==", username)
+      .limit(1)
+      .get();
 
-    if (!user) {
+    if (userSnapshot.empty) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
 
-    await user.update({ expo_push_token: expoToken });
+    const userData = userSnapshot.docs[0].data();
+    const userId = userSnapshot.docs[0].id;
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    // Check if user status is false, prevent login
+    if (!userData.status) {
+      return res
+        .status(401)
+        .json({ error: "Your account is inactive. Please contact support." });
+    }
+
+    // Fetch the role document using the RoleId reference
+    const roleDoc = await firestore
+      .collection("roles")
+      .doc(userData.RoleId)
+      .get();
+
+    // Check if the role document exists and extract the roleName
+    let roleName = null;
+    if (roleDoc.exists) {
+      roleName = roleDoc.data().roleName;
+    } else {
+      console.error("Role document does not exist for user:", username);
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, userData.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: "Invalid username or password." });
     }
 
+    // Update expo push token in Firestore
+    if (expoToken) {
+      await firestore
+        .collection("users")
+        .doc(userId)
+        .update({ expo_push_token: expoToken });
+    }
+
+    // Generate Firebase custom token with additional claims
+    const user = {
+      id: userId,
+      username: userData.username,
+      email: userData.email,
+      avatar: userData.avatar,
+      role: roleName,
+    };
     const token = generateToken(user);
     res.status(200).json(token);
   } catch (error) {
@@ -114,67 +220,470 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/all", checkRole(["KTX", "SCH"]), async (req, res) => {
+router.get("/all", async (req, res) => {
   try {
-    const userId = req.user.id;
-    const allStudents = await User.findAll({
-      where: {
-        id: {
-          [Op.not]: userId,
-        },
-      },
-      include: { model: Room, include: { model: Dormitory } },
-      attributes: { exclude: ["password"] },
-    });
+    const querySnapshot = await firestore.collection("users").get();
+    const allStudents = [];
+
+    for (const doc of querySnapshot.docs) {
+      const studentData = doc.data();
+
+      delete studentData.password;
+      delete studentData.expo_push_token;
+
+      const roomRef = studentData.RoomId;
+      const majorRef = studentData.MajorId;
+
+      if (!roomRef && !majorRef) {
+        allStudents.push({
+          id: doc.id,
+          ...studentData,
+          Room: null,
+          Major: null,
+          School: null,
+        });
+        continue;
+      }
+
+      const roomData = roomRef
+        ? (await firestore.collection("rooms").doc(roomRef).get()).data()
+        : null;
+      const majorData = majorRef
+        ? (await firestore.collection("majors").doc(majorRef).get()).data()
+        : null;
+      const dormitoryData =
+        roomData && roomData.DormitoryId
+          ? (
+              await firestore
+                .collection("dormitories")
+                .doc(roomData.DormitoryId)
+                .get()
+            ).data()
+          : null;
+      const schoolData =
+        majorData && majorData.SchoolId
+          ? (
+              await firestore
+                .collection("schools")
+                .doc(majorData.SchoolId)
+                .get()
+            ).data()
+          : null;
+
+      const room = roomData
+        ? {
+            id: roomRef,
+            roomNumber: roomData.roomNumber,
+            numberOfStudents: roomData.numberOfStudents,
+            Dormitory: dormitoryData
+              ? {
+                  id: roomData.DormitoryId,
+                  dormName: dormitoryData.dormName,
+                }
+              : null,
+          }
+        : null;
+
+      const major = majorData
+        ? {
+            id: majorRef,
+            majorName: majorData.majorName,
+            School: schoolData
+              ? {
+                  id: majorData.SchoolId,
+                  schoolName: schoolData.schoolName,
+                }
+              : null,
+          }
+        : null;
+
+      allStudents.push({
+        id: doc.id,
+        ...studentData,
+        Room: room,
+        Major: major,
+      });
+    }
+
     res.status(200).json(allStudents);
   } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/all/manager", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const { role } = req.query;
+    const roleRef = await firestore.collection("roles").doc(role).get();
+    const roleData = roleRef.data();
+    if (!roleData) {
+      return res.status(404).json({ error: "Role not found" });
+    }
+
+    const usersSnapshot = await firestore
+      .collection("users")
+      .where("RoleId", "==", roleRef.id)
+      .get();
+    if (!usersSnapshot) {
+      return res.status(500).json({ error: "Failed to fetch users data" });
+    }
+    const usersData = usersSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+      Role: roleData,
+    }));
+
+    res.status(200).json(usersData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+router.put("/update/status/:userId", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.body;
+    await firestore
+      .collection("users")
+      .doc(userId)
+      .update({
+        status: Boolean(status),
+      });
+    res.status(200).json({ message: "User status updated successfully." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+//Role
+router.get("/all/role", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const rolesSnapshot = await firestore.collection("roles").get();
+    const rolesData = rolesSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+    res.status(200).json(rolesData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.put("/role/update", checkRole(["Admin"]), async (req, res) => {
+  const { roleId, userId } = req.body;
+  try {
+    await firestore.collection("users").doc(userId).update({
+      RoleId: roleId,
+    });
+    res.status(200).json({ message: "Role updated successfully" });
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
 //For Appliciation
-router.get("/:userId/detail", async (req, res) => {
+router.get("/detail/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
-    const user = await User.findOne({
-      where: { id: userId },
-      attributes: { exclude: "password" },
-      include: [
-        {
-          model: Room,
-        },
-        {
-          model: Major,
-          include: [{ model: School }],
-        },
-      ],
-    });
-    if (!user) {
+    // Retrieve user document from Firestore
+    const userSnapshot = await firestore.collection("users").doc(userId).get();
+    const userData = userSnapshot.data();
+
+    // Check if user exists
+    if (!userData) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.status(200).json(user);
+
+    // Include related data using additional queries
+    const roomId = userData.RoomId;
+    const majorId = userData.MajorId;
+
+    // Initialize roomData and majorData as empty objects
+    let roomData = {};
+    let majorData = {};
+
+    // Retrieve room data if RoomId exists
+    if (roomId) {
+      const roomSnapshot = await firestore
+        .collection("rooms")
+        .doc(roomId)
+        .get();
+      roomData = roomSnapshot.data() || {};
+    }
+
+    // Retrieve major data if MajorId exists
+    if (majorId) {
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .doc(majorId)
+        .get();
+      majorData = majorSnapshot.data() || {};
+    }
+    // Retrieve school data if SchoolId exists in majorData
+    const schoolId = majorData.SchoolId;
+    let schoolData = {};
+    if (schoolId) {
+      const schoolSnapshot = await firestore
+        .collection("schools")
+        .doc(schoolId)
+        .get();
+      schoolData = schoolSnapshot.data() || {};
+    }
+
+    // Construct response object
+    const userDetail = {
+      id: userId,
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email,
+      phoneNumber: userData.phoneNumber,
+      avatar: userData.avatar,
+      degree: userData.degree,
+      Room: roomData,
+      Major: {
+        ...majorData,
+        School: schoolData,
+      },
+    };
+    res.status(200).json(userDetail);
   } catch (error) {
     console.error("Error fetching user details:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+router.get(
+  "/detail",
+  checkRole(["STUDENT", "SCH", "KTX", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      // Retrieve user document from Firestore
+      const userSnapshot = await firestore
+        .collection("users")
+        .doc(userId)
+        .get();
+      const userData = userSnapshot.data();
+
+      // Check if user exists
+      if (!userData) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Include related data using additional queries
+      const roomId = userData.RoomId;
+      const majorId = userData.MajorId;
+
+      // Initialize roomData and majorData as empty objects
+      let roomData = {};
+      let majorData = {};
+
+      // Retrieve room data if RoomId exists
+      if (roomId) {
+        const roomSnapshot = await firestore
+          .collection("rooms")
+          .doc(roomId)
+          .get();
+        roomData = roomSnapshot.data() || {};
+      }
+
+      // Retrieve major data if MajorId exists
+      if (majorId) {
+        const majorSnapshot = await firestore
+          .collection("majors")
+          .doc(majorId)
+          .get();
+        majorData = majorSnapshot.data() || {};
+      }
+
+      // Retrieve school data if SchoolId exists in majorData
+      const schoolId = majorData.SchoolId;
+      let schoolData = {};
+      if (schoolId) {
+        const schoolSnapshot = await firestore
+          .collection("schools")
+          .doc(schoolId)
+          .get();
+        schoolData = schoolSnapshot.data() || {};
+      }
+
+      // Construct response object
+      const userDetail = {
+        id: userId,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        email: userData.email,
+        phoneNumber: userData.phoneNumber,
+        avatar: userData.avatar,
+        degree: userData.degree,
+        Room: roomData,
+        Major: {
+          ...majorData,
+          School: schoolData,
+        },
+      };
+      res.status(200).json(userDetail);
+    } catch (error) {
+      console.error("Error fetching user details:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 router.get(
   "/alluser",
   checkRole(["KTX", "SCH", "STUDENT"]),
   async (req, res) => {
     try {
       const userId = req.user.id;
-      const allUsers = await User.findAll({
-        where: {
-          id: {
-            [Op.not]: userId,
-          },
-        },
+      // Get all user documents except for the current user
+      const userSnapshot = await firestore.collection("users").get();
+
+      const allUsers = [];
+      userSnapshot.forEach((doc) => {
+        // Exclude current user from the result
+        if (doc.id !== userId) {
+          const { avatar, firstName, lastName } = doc.data();
+          allUsers.push({ id: doc.id, avatar, firstName, lastName });
+        }
       });
+
       res.json(allUsers);
     } catch (error) {
       console.error("Error fetching user details:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+router.put("/edit", checkRole(["KTX", "SCH", "STUDENT"]), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { avatar, phoneNumber, email } = req.body;
+
+    // Construct updated user object
+    const updatedUser = {};
+    if (avatar) updatedUser.avatar = avatar;
+    if (phoneNumber) updatedUser.phoneNumber = phoneNumber;
+    if (email) updatedUser.email = email;
+
+    // Update user document in Firestore
+    await firestore.collection("users").doc(userId).update(updatedUser);
+
+    res.status(200).json({ message: "User information updated successfully." });
+  } catch (error) {
+    console.error("Error updating user information:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get(
+  "/leader",
+  checkRole(["KTX", "SCH", "STUDENT"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      // Retrieve user document from Firestore
+      const userSnapshot = await firestore
+        .collection("users")
+        .doc(userId)
+        .get();
+      const userData = userSnapshot.data();
+
+      // Extract room and major IDs from user data
+      const roomId = userData.RoomId;
+      const majorId = userData.MajorId;
+      if (!roomId || !majorId) {
+        return res
+          .status(404)
+          .json({ error: "User does not have RoomId or MajorId" });
+      }
+      // Retrieve room and major documents from Firestore
+      const roomSnapshot = await firestore
+        .collection("rooms")
+        .doc(roomId)
+        .get();
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .doc(majorId)
+        .get();
+
+      // Extract dormitory and school IDs from room and major data
+      const dormitoryId = roomSnapshot.data().DormitoryId;
+      const schoolId = majorSnapshot.data().SchoolId;
+
+      // Retrieve dormitory and school documents from Firestore
+      const dormitorySnapshot = await firestore
+        .collection("dormitories")
+        .doc(dormitoryId)
+        .get();
+      const schoolSnapshot = await firestore
+        .collection("schools")
+        .doc(schoolId)
+        .get();
+
+      // Extract manager IDs from dormitory and school data
+      const dormitoryManagers = dormitorySnapshot.data().managers;
+      const schoolManagers = schoolSnapshot.data().managers;
+
+      // Fetch manager details from Firestore with specific fields
+      const dormitoryManagerPromises = dormitoryManagers.map(
+        async (manager) => {
+          const { userId, role } = manager;
+          const managerSnapshot = await firestore
+            .collection("users")
+            .doc(userId)
+            .get();
+          const managerData = managerSnapshot.data();
+          return {
+            id: managerSnapshot.id,
+            lastName: managerData.lastName,
+            firstName: managerData.firstName,
+            avatar: managerData.avatar,
+            phoneNumber: managerData.phoneNumber,
+            major: managerData.major,
+            room: managerData.room,
+            role: role,
+          };
+        }
+      );
+
+      const schoolManagerPromises = schoolManagers.map(async (manager) => {
+        const { userId, role } = manager;
+        const managerSnapshot = await firestore
+          .collection("users")
+          .doc(userId)
+          .get();
+        const managerData = managerSnapshot.data();
+        return {
+          id: managerSnapshot.id,
+          lastName: managerData.lastName,
+          firstName: managerData.firstName,
+          avatar: managerData.avatar,
+          phoneNumber: managerData.phoneNumber,
+          major: managerData.major,
+          room: managerData.room,
+          role: role,
+        };
+      });
+
+      // Wait for all manager details to be fetched
+      const dormitoryManagerData = await Promise.all(dormitoryManagerPromises);
+      const schoolManagerData = await Promise.all(schoolManagerPromises);
+
+      // Construct the response object
+      const response = {
+        dormitoryManagers: dormitoryManagerData,
+        schoolManagers: schoolManagerData,
+      };
+
+      res.status(200).json(response);
+    } catch (error) {
+      console.error("Error fetching user details:", error);
+      res.status(500).json({ message: "Internal server error" });
     }
   }
 );
