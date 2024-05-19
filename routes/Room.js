@@ -388,99 +388,113 @@ router.get(
 );
 
 //Material For Students
-router.post("/material", async (req, res) => {
-  try {
-    const { userId, materials } = req.body;
+// router.post(
+//   "/material",
+//   checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
+//   async (req, res) => {
+//     try {
+//       const { materials } = req.body;
+//       const userId = req.user.id;
+//       if (!userId || !materials) {
+//         return res.status(400).json({ error: "All fields are required." });
+//       }
 
-    if (!userId || !materials) {
-      return res.status(400).json({ error: "All fields are required." });
+//       // Check if there's an existing document for the user
+//       const userMaterialsRef = firestore
+//         .collection("usermaterials")
+//         .doc(userId);
+//       const userMaterialsDoc = await userMaterialsRef.get();
+
+//       // If the document exists, update it with the new materials
+//       if (userMaterialsDoc.exists) {
+//         await userMaterialsRef.update({
+//           materials: materials,
+//         });
+//       } else {
+//         // If the document doesn't exist, create a new one
+//         await userMaterialsRef.set({
+//           UserId: userId,
+//           materials,
+//         });
+//       }
+
+//       res.status(201).json({ message: "Materials updated successfully." });
+//     } catch (error) {
+//       console.error("Error updating materials:", error);
+//       res.status(500).json({ error: "Internal server error." });
+//     }
+//   }
+// );
+router.get(
+  "/usermaterials/:userId",
+  checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      if (!userId) {
+        return res.status(400).json({ error: "User ID is required." });
+      }
+
+      // Query Firestore to find the user materials document with eUserId matching userId
+      const userMaterialsRef = firestore
+        .collection("usermaterials")
+        .where("UserId", "==", userId);
+      const userMaterialsSnapshot = await userMaterialsRef.get();
+
+      if (userMaterialsSnapshot.empty) {
+        return res.status(404).json({ error: "User materials not found." });
+      }
+
+      // Extract and return the materials data
+      const userData = userMaterialsSnapshot.docs[0].data();
+      const materials = userData.materials;
+
+      res.status(200).json(materials);
+    } catch (error) {
+      console.error("Error fetching user materials:", error);
+      res.status(500).json({ error: "Internal server error." });
     }
+  }
+);
 
-    // Check if there's an existing document for the user
-    const userMaterialsRef = firestore.collection("usermaterials").doc(userId);
-    const userMaterialsDoc = await userMaterialsRef.get();
+router.put(
+  "/material",
+  checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
+  async (req, res) => {
+    try {
+      const { materials } = req.body;
+      const userId = req.user.id;
 
-    // If the document exists, update it with the new materials
-    if (userMaterialsDoc.exists) {
-      await userMaterialsRef.update({
+      if (!materials || !userId) {
+        return res.status(400).json({ error: "All fields are required." });
+      }
+
+      // Query user materials based on UserId
+      const userMaterialsRef = firestore
+        .collection("usermaterials")
+        .where("UserId", "==", userId);
+      const querySnapshot = await userMaterialsRef.get();
+
+      if (querySnapshot.empty) {
+        return res.status(404).json({ error: "User materials not found." });
+      }
+
+      // Since there should be only one document, retrieve the first one
+      const userMaterialsDoc = querySnapshot.docs[0];
+
+      // Update the user materials with the new data
+      await userMaterialsDoc.ref.update({
         materials: materials,
       });
-    } else {
-      // If the document doesn't exist, create a new one
-      await userMaterialsRef.set({
-        UserId: userId,
-        materials,
-      });
-    }
 
-    res.status(201).json({ message: "Materials updated successfully." });
-  } catch (error) {
-    console.error("Error updating materials:", error);
-    res.status(500).json({ error: "Internal server error." });
+      res.status(200).json({ message: "User materials updated successfully." });
+    } catch (error) {
+      console.error("Error updating user materials:", error);
+      res.status(500).json({ error: "Internal server error." });
+    }
   }
-});
-router.get("/usermaterials/:userId", async (req, res) => {
-  try {
-    const userId = req.params.userId;
-
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required." });
-    }
-
-    // Query Firestore to find the user materials document with eUserId matching userId
-    const userMaterialsRef = firestore
-      .collection("usermaterials")
-      .where("UserId", "==", userId);
-    const userMaterialsSnapshot = await userMaterialsRef.get();
-
-    if (userMaterialsSnapshot.empty) {
-      return res.status(404).json({ error: "User materials not found." });
-    }
-
-    // Extract and return the materials data
-    const userData = userMaterialsSnapshot.docs[0].data();
-    const materials = userData.materials;
-
-    res.status(200).json(materials);
-  } catch (error) {
-    console.error("Error fetching user materials:", error);
-    res.status(500).json({ error: "Internal server error." });
-  }
-});
-
-router.put("/material/:userId", async (req, res) => {
-  try {
-    const { materials } = req.body;
-    const userId = req.params.userId;
-
-    if (!materials || !userId) {
-      return res.status(400).json({ error: "All fields are required." });
-    }
-
-    // Query user materials based on UserId
-    const userMaterialsRef = firestore
-      .collection("usermaterials")
-      .where("UserId", "==", userId);
-    const querySnapshot = await userMaterialsRef.get();
-
-    if (querySnapshot.empty) {
-      return res.status(404).json({ error: "User materials not found." });
-    }
-
-    // Since there should be only one document, retrieve the first one
-    const userMaterialsDoc = querySnapshot.docs[0];
-
-    // Update the user materials with the new data
-    await userMaterialsDoc.ref.update({
-      materials: materials,
-    });
-
-    res.status(200).json({ message: "User materials updated successfully." });
-  } catch (error) {
-    console.error("Error updating user materials:", error);
-    res.status(500).json({ error: "Internal server error." });
-  }
-});
+);
 
 //Report
 

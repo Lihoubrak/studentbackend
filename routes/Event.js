@@ -68,6 +68,7 @@ router.post(
         eventsInProgram: parsedEventsInProgram,
         ticketPrice,
         paymentPerStudent,
+
         numberOfTicket: numberOfTicket || 0,
       });
 

@@ -20,6 +20,8 @@ function checkRole(roles) {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const userRole = decoded.role;
+      console.log("Decoded role:", userRole);
+      console.log("Allowed roles:", roles);
       if (roles.includes(userRole.trim())) {
         req.user = decoded;
         next();

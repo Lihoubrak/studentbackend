@@ -343,4 +343,54 @@ router.delete("/remove/:schoolId", checkRole(["Admin"]), async (req, res) => {
     });
   }
 });
+
+router.get(
+  "/getstudentinmajor",
+  checkRole(["STUDENT", "KTX", "SCH", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { year } = req.query;
+
+      // Lấy MajorId và SchoolId của người dùng từ Firestore
+      const userRef = await firestore.collection("users").doc(userId).get();
+      const majorId = userRef.data().MajorId;
+
+      // Lấy thông tin về major từ Firestore
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .doc(majorId)
+        .get();
+      const majorData = majorSnapshot.data();
+      const major = {
+        majorName: majorData.majorName,
+        majorImage: majorData.majorImage,
+      };
+
+      // Truy vấn danh sách sinh viên trong cùng Major và cùng School
+      const studentsSnapshot = await firestore
+        .collection("users")
+        .where("MajorId", "==", majorId)
+        .where("userDate", ">=", new Date(`${year}-01-01`))
+        .where("userDate", "<=", new Date(`${year}-12-31`))
+        .get();
+
+      // Chuyển đổi dữ liệu snapshot thành mảng danh sách sinh viên
+      const students = [];
+      studentsSnapshot.forEach((doc) => {
+        const student = doc.data();
+        delete student.password;
+        delete student.expo_push_token;
+        students.push({ ...student, id: doc.id });
+      });
+
+      // Trả về danh sách sinh viên và thông tin về major cho client
+      res.status(200).json({ students, major });
+    } catch (error) {
+      console.error("Error fetching students:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 module.exports = router;

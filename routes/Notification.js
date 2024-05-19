@@ -4,7 +4,7 @@ const router = express.Router();
 const admin = require("firebase-admin");
 const { firestore } = require("../firebase/firebase");
 const sendPushNotifications = require("../utils/sendPushNotifications");
-router.post("/send", checkRole(["KTX", "SCH"]), async (req, res) => {
+router.post("/send", checkRole(["KTX", "SCH", "Admin"]), async (req, res) => {
   try {
     const { description, content, type, notificationTo } = req.body;
     const userId = req.user.id;
@@ -174,4 +174,49 @@ router.get("/number-notification", checkRole("STUDENT"), async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
+router.get(
+  "/allnotification",
+  checkRole(["Admin", "SCH", "KTX"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const query = firestore
+        .collection("notifications")
+        .where("sentBy", "==", userId);
+
+      // Get all notifications based on the query
+      const userNotificationsSnapshot = await query.get();
+      // Map the snapshot to get notification data
+      const userNotifications = userNotificationsSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      res.status(200).json(userNotifications);
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// Route to delete a notification by ID
+router.delete(
+  "/delete/:notificationId",
+  checkRole(["Admin", "SCH", "KTX"]),
+  async (req, res) => {
+    try {
+      const notificationId = req.params.notificationId;
+
+      // Delete the notification document from Firestore
+      await firestore.collection("notifications").doc(notificationId).delete();
+
+      res.status(200).json({ message: "Notification deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting notification:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 module.exports = router;

@@ -64,49 +64,50 @@ router.get("/all", checkRole(["KTX"]), async (req, res) => {
   try {
     const { year, month } = req.query;
     const userId = req.user.id;
-    const startDate = new Date(year, month - 1, 1); // Note: month is zero-based in JavaScript Date object
-    const endDate = new Date(year, month, 0); // Note: month is zero-based in JavaScript Date object
-    // Array to store all water readings
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0);
+    const rolesArray = [
+      { id: 1, roleName: "Admin" },
+      { id: 2, roleName: "Manager" },
+      { id: 3, roleName: "User" },
+      // Add more roles as needed
+    ];
     let waterReadings = [];
 
-    // Fetch dormitories for the user
-    const dormitoriesSnapshot = await firestore
-      .collection("dormitories")
-      .where("managers", "array-contains", userId)
-      .get();
-
-    for (const dormDoc of dormitoriesSnapshot.docs) {
-      const dormId = dormDoc.id;
-
-      // Fetch rooms for the current dormitory
-      const roomsSnapshot = await firestore
-        .collection("rooms")
-        .where("DormitoryId", "==", dormId)
+    for (const role of rolesArray) {
+      const dormitoriesSnapshot = await firestore
+        .collection("dormitories")
+        .where("managers", "array-contains", { userId, role: role.roleName })
         .get();
 
-      for (const roomDoc of roomsSnapshot.docs) {
-        const roomId = roomDoc.id;
-        const roomData = roomDoc.data();
-
-        // Fetch water readings for the current room within the specified date range
-        const waterSnapshot = await firestore
-          .collection("waters")
-          .where("RoomId", "==", roomId)
-          .where("date", ">=", startDate)
-          .where("date", "<=", endDate)
+      for (const dormDoc of dormitoriesSnapshot.docs) {
+        const dormId = dormDoc.id;
+        const roomsSnapshot = await firestore
+          .collection("rooms")
+          .where("DormitoryId", "==", dormId)
           .get();
 
-        // Accumulate water readings for each room
-        waterReadings.push(
-          ...waterSnapshot.docs.map((doc) => ({
-            ...doc.data(),
-            Room: roomData,
-          }))
-        );
+        for (const roomDoc of roomsSnapshot.docs) {
+          const roomId = roomDoc.id;
+          const roomData = roomDoc.data();
+
+          const waterSnapshot = await firestore
+            .collection("waters")
+            .where("RoomId", "==", roomId)
+            .where("date", ">=", startDate)
+            .where("date", "<=", endDate)
+            .get();
+
+          waterReadings.push(
+            ...waterSnapshot.docs.map((doc) => ({
+              ...doc.data(),
+              Room: roomData,
+            }))
+          );
+        }
       }
     }
 
-    // Send response with water readings
     if (waterReadings.length > 0) {
       res.status(200).json(waterReadings);
     } else {
@@ -121,53 +122,57 @@ router.get("/all", checkRole(["KTX"]), async (req, res) => {
 });
 
 //For Application
-router.get("/user/all", checkRole(["STUDENT"]), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { year, month } = req.query;
+router.get(
+  "/user/all",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { year, month } = req.query;
 
-    // Get user document
-    const userRef = await firestore.collection("users").doc(userId);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
-      return res.status(404).json({ error: "User not found" });
+      // Get user document
+      const userRef = await firestore.collection("users").doc(userId);
+      const userDoc = await userRef.get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Get user's room ID
+      const roomId = userDoc.data().RoomId;
+      const roomRef = await firestore.collection("rooms").doc(roomId).get();
+      const roomDoc = await roomRef.data();
+
+      // Construct date range
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0);
+      // Fetch water data for the user's room within the specified date range
+      const waterSnapshot = await firestore
+        .collection("waters")
+        .where("RoomId", "==", roomId)
+        .where("date", ">=", startDate)
+        .where("date", "<=", endDate)
+        .get();
+
+      if (waterSnapshot.empty) {
+        return res.status(404).json({ error: "Water data not found" });
+      }
+
+      // Accumulate water data
+      let waterData = {};
+      waterSnapshot.forEach((doc) => {
+        const data = doc.data();
+        waterData = {
+          ...data,
+          roomNumber: roomDoc.roomNumber,
+        };
+      });
+
+      res.status(200).json(waterData); // Send waterData as a single object
+    } catch (error) {
+      console.error("Error fetching water data:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
-
-    // Get user's room ID
-    const roomId = userDoc.data().RoomId;
-    const roomRef = await firestore.collection("rooms").doc(roomId).get();
-    const roomDoc = await roomRef.data();
-
-    // Construct date range
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0);
-    // Fetch water data for the user's room within the specified date range
-    const waterSnapshot = await firestore
-      .collection("waters")
-      .where("RoomId", "==", roomId)
-      .where("date", ">=", startDate)
-      .where("date", "<=", endDate)
-      .get();
-
-    if (waterSnapshot.empty) {
-      return res.status(404).json({ error: "Water data not found" });
-    }
-
-    // Accumulate water data
-    let waterData = {};
-    waterSnapshot.forEach((doc) => {
-      const data = doc.data();
-      waterData = {
-        ...data,
-        roomNumber: roomDoc.roomNumber,
-      };
-    });
-
-    res.status(200).json(waterData); // Send waterData as a single object
-  } catch (error) {
-    console.error("Error fetching water data:", error);
-    res.status(500).json({ error: "Internal server error" });
   }
-});
+);
 
 module.exports = router;

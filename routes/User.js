@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const { generateToken, checkRole } = require("../middleware/authenticateToken");
 const { firestore, fireauth } = require("../firebase/firebase");
+const { sendVerificationCode } = require("../utils/sendVerificationCode");
 const router = express.Router();
 router.post("/register", async (req, res) => {
   try {
@@ -27,6 +28,7 @@ router.post("/register", async (req, res) => {
       dormitoryId,
       year,
     } = req.body;
+
     // Validate required fields
     if (!username || !email || !password) {
       return res
@@ -37,14 +39,6 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Passwords do not match." });
     }
 
-    // Check if the email already exists in Firebase Authentication
-    // const userRecordByEmail = await fireauth.getUserByEmail(email);
-    // if (userRecordByEmail) {
-    //   return res
-    //     .status(400)
-    //     .json({ error: "Email address is already in use." });
-    // }
-
     // Check if the username already exists in Firestore
     const userRecordByUsername = await firestore
       .collection("users")
@@ -54,13 +48,7 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Username is already in use." });
     }
 
-    // Create the user in Firebase Authentication
-    const authUser = await fireauth.createUser({
-      email,
-      password,
-    });
-    const userId = authUser.uid;
-    // Hash the password (if needed)
+    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Get Room and Major IDs
@@ -68,14 +56,14 @@ router.post("/register", async (req, res) => {
       .collection("rooms")
       .where("roomNumber", "==", String(room))
       .where("DormitoryId", "==", dormitoryId)
-      .limit(1) // Retrieve at most one matching room document
+      .limit(1)
       .get();
 
     const dormrSnapshot = await firestore
       .collection("majors")
       .where("majorName", "==", String(major))
       .where("SchoolId", "==", schoolId)
-      .limit(1) // Retrieve at most one matching dormitory document
+      .limit(1)
       .get();
 
     const roomReference = roomSnapshot.docs[0] ? roomSnapshot.docs[0].id : null;
@@ -83,20 +71,6 @@ router.post("/register", async (req, res) => {
       ? dormrSnapshot.docs[0].id
       : null;
 
-    // // Handle room not found
-    // if (roomSnapshot.empty) {
-    //   return res.status(400).json({
-    //     error:
-    //       "Room not found. Please verify the room number or contact administration.",
-    //   });
-    // }
-    // // // Handle major not found
-    // if (dormrSnapshot.empty) {
-    //   return res.status(400).json({
-    //     error:
-    //       "Major not found. Please verify the major name or contact administration.",
-    //   });
-    // }
     let roleStudentId;
     const roleStudentSnapshot = await firestore
       .collection("roles")
@@ -109,6 +83,7 @@ router.post("/register", async (req, res) => {
     } else {
       console.log("No role with roleName 'STUDENT' found.");
     }
+
     // Create new user object
     const newUser = {
       username,
@@ -137,9 +112,12 @@ router.post("/register", async (req, res) => {
       expo_push_token: expo_push_token || null,
       userDate: new Date(),
     };
-    // Create user document in Firestore (implementation omitted for brevity)
-    await firestore.collection("users").doc(userId).set(newUser);
-    res.status(201).json({ message: "User registered successfully." });
+
+    // Create user document in Firestore
+    const userRef = await firestore.collection("users").add(newUser);
+    const userId = userRef.id;
+
+    res.status(201).json({ userId, message: "User registered successfully." });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Internal server error." });
@@ -356,6 +334,20 @@ router.put("/update/status/:userId", checkRole(["Admin"]), async (req, res) => {
     res.status(500).json({ error: "Internal server error." });
   }
 });
+router.put("/update-password", checkRole(["Admin"]), async (req, res) => {
+  try {
+    const { newPassword, userId } = req.body;
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await firestore.collection("users").doc(userId).update({
+      password: hashedPassword,
+    });
+    res.status(200).json({ message: "Password updated successfully." });
+  } catch (error) {
+    console.error("Error updating password:", error);
+    res.status(500).json({ error: "Failed to update password." });
+  }
+});
 
 //Role
 router.get("/all/role", checkRole(["Admin"]), async (req, res) => {
@@ -385,6 +377,260 @@ router.put("/role/update", checkRole(["Admin"]), async (req, res) => {
   }
 });
 
+//verificationCodes
+router.post(
+  "/send-verification-code",
+  checkRole(["Admin", "SCH", "STUDENT", "KTX"]),
+  async (req, res) => {
+    try {
+      const { userEmailAddress } = req.body;
+      const userId = req.user.id;
+      const userDoc = await firestore.collection("users").doc(userId).get();
+
+      // Check if the user exists with the provided email address
+      if (!userDoc.exists || userDoc.data().email !== userEmailAddress) {
+        return res
+          .status(400)
+          .json({ error: "User with this email does not exist." });
+      }
+
+      // Check if the user already has a verification code record
+      const verificationCodeRef = await firestore
+        .collection("verificationCodes")
+        .where("email", "==", userEmailAddress)
+        .get();
+
+      let verificationCodeDocRef;
+
+      // If a verification code record already exists, get its reference
+      if (!verificationCodeRef.empty) {
+        verificationCodeDocRef = verificationCodeRef.docs[0].ref;
+      } else {
+        // If no verification code record exists, create a new one
+        const { code, expiration } = await sendVerificationCode(
+          userEmailAddress
+        );
+        const hashedCode = await bcrypt.hash(code.toString(), 10);
+
+        verificationCodeDocRef = await firestore
+          .collection("verificationCodes")
+          .add({
+            UserId: userId,
+            email: userEmailAddress,
+            code: hashedCode,
+            expiration,
+          });
+      }
+
+      // Send a new verification code
+      const { code, expiration } = await sendVerificationCode(userEmailAddress);
+      const hashedCode = await bcrypt.hash(code.toString(), 10);
+
+      // Update the verification code document
+      await verificationCodeDocRef.update({
+        code: hashedCode,
+        expiration: expiration,
+      });
+
+      res.status(200).json({ message: "Verification code sent successfully." });
+    } catch (error) {
+      console.error("Error sending verification code:", error);
+      res.status(500).json({ error: "Failed to send verification code." });
+    }
+  }
+);
+
+router.post(
+  "/verify-code",
+  checkRole(["Admin", "SCH", "STUDENT", "KTX"]),
+  async (req, res) => {
+    try {
+      const { code } = req.body;
+      const userId = req.user.id;
+      // Retrieve hashed verification code from the database
+      const verificationCodeSnapshot = await firestore
+        .collection("verificationCodes")
+        .where("UserId", "==", userId)
+        .get();
+
+      if (verificationCodeSnapshot.empty) {
+        return res.status(400).json({ error: "Verification code not found." });
+      }
+
+      const verificationCodeDoc = verificationCodeSnapshot.docs[0];
+      const verificationCodeData = verificationCodeDoc.data();
+      const storedHashedCode = verificationCodeData.code;
+      const expirationDate = verificationCodeData.expiration.toDate();
+
+      // Check if the code is expired
+      if (expirationDate < new Date()) {
+        return res
+          .status(400)
+          .json({ error: "Verification code has expired." });
+      }
+
+      // Compare the provided code with the hashed code
+      const isMatch = await bcrypt.compare(code, storedHashedCode);
+
+      if (!isMatch) {
+        return res.status(400).json({ error: "Invalid verification code." });
+      }
+
+      // Delete the verification code record after successful verification
+      await verificationCodeDoc.ref.delete();
+
+      res.status(200).json({ message: "Verification successful." });
+    } catch (error) {
+      console.error("Error verifying code:", error);
+      res.status(500).json({ error: "Failed to verify code." });
+    }
+  }
+);
+
+router.post(
+  "/reset-otp",
+  checkRole(["Admin", "SCH", "STUDENT", "KTX"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const userDoc = await firestore.collection("users").doc(userId).get();
+
+      // Check if the user exists
+      if (!userDoc.exists) {
+        return res.status(400).json({ error: "User not found." });
+      }
+
+      // Generate a new verification code
+      const { code, expiration } = await sendVerificationCode(
+        userDoc.data().email
+      );
+
+      // Hash the new verification code
+      const hashedCode = await bcrypt.hash(code.toString(), 10);
+
+      // Find the existing verification code or create a new one
+      let verificationCodeDoc;
+      const verificationCodeSnapshot = await firestore
+        .collection("verificationCodes")
+        .where("UserId", "==", userId)
+        .get();
+
+      if (verificationCodeSnapshot.empty) {
+        // Create a new verification code record
+        verificationCodeDoc = await firestore
+          .collection("verificationCodes")
+          .add({
+            UserId: userId,
+            email: userDoc.data().email,
+            code: hashedCode,
+            expiration: expiration,
+          });
+      } else {
+        verificationCodeDoc = verificationCodeSnapshot.docs[0];
+        // Update the existing verification code in Firestore
+        await verificationCodeDoc.ref.update({
+          code: hashedCode, // Store the hashed code instead of the plain code
+          expiration: expiration,
+        });
+      }
+
+      res.status(200).json({ message: "OTP reset successfully." });
+    } catch (error) {
+      console.error("Error resetting OTP:", error);
+      res.status(500).json({ error: "Failed to reset OTP." });
+    }
+  }
+);
+router.put(
+  "/update-password-by-user",
+  checkRole(["KTX", "Admin", "SCH", "STUDENT"]),
+  async (req, res) => {
+    try {
+      const { newPassword } = req.body;
+      const userId = req.user.id;
+      // Hash the new password
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      // Update the user's password in the database
+      await firestore.collection("users").doc(userId).update({
+        password: hashedPassword,
+      });
+      res.status(200).json({ message: "Password updated successfully." });
+    } catch (error) {
+      console.error("Error updating password:", error);
+      res.status(500).json({ error: "Failed to update password." });
+    }
+  }
+);
+router.get("/profile", checkRole(["KTX", "Admin", "SCH"]), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Retrieve user document from Firestore
+    const userSnapshot = await firestore.collection("users").doc(userId).get();
+    const userData = userSnapshot.data();
+
+    // Check if user exists
+    if (!userData) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Include related data using additional queries
+    const roomId = userData.RoomId;
+    const majorId = userData.MajorId;
+
+    // Initialize roomData and majorData as empty objects
+    let roomData = {};
+    let majorData = {};
+
+    // Retrieve room data if RoomId exists
+    if (roomId) {
+      const roomSnapshot = await firestore
+        .collection("rooms")
+        .doc(roomId)
+        .get();
+      roomData = roomSnapshot.data() || {};
+    }
+
+    // Retrieve major data if MajorId exists
+    if (majorId) {
+      const majorSnapshot = await firestore
+        .collection("majors")
+        .doc(majorId)
+        .get();
+      majorData = majorSnapshot.data() || {};
+    }
+    // Retrieve school data if SchoolId exists in majorData
+    const schoolId = majorData.SchoolId;
+    let schoolData = {};
+    if (schoolId) {
+      const schoolSnapshot = await firestore
+        .collection("schools")
+        .doc(schoolId)
+        .get();
+      schoolData = schoolSnapshot.data() || {};
+    }
+
+    // Construct response object
+    const userDetail = {
+      id: userId,
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email,
+      phoneNumber: userData.phoneNumber,
+      avatar: userData.avatar,
+      degree: userData.degree,
+      facebook: userData.facebook,
+      Room: roomData,
+      Major: {
+        ...majorData,
+        School: schoolData,
+      },
+    };
+    res.status(200).json(userDetail);
+  } catch (error) {
+    console.error("Error fetching user details:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 //For Appliciation
 router.get("/detail/:userId", async (req, res) => {
   try {
@@ -559,26 +805,32 @@ router.get(
     }
   }
 );
-router.put("/edit", checkRole(["KTX", "SCH", "STUDENT"]), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { avatar, phoneNumber, email } = req.body;
+router.put(
+  "/edit",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const { avatar, phoneNumber, email } = req.body;
 
-    // Construct updated user object
-    const updatedUser = {};
-    if (avatar) updatedUser.avatar = avatar;
-    if (phoneNumber) updatedUser.phoneNumber = phoneNumber;
-    if (email) updatedUser.email = email;
+      // Construct updated user object
+      const updatedUser = {};
+      if (avatar) updatedUser.avatar = avatar;
+      if (phoneNumber) updatedUser.phoneNumber = phoneNumber;
+      if (email) updatedUser.email = email;
 
-    // Update user document in Firestore
-    await firestore.collection("users").doc(userId).update(updatedUser);
+      // Update user document in Firestore
+      await firestore.collection("users").doc(userId).update(updatedUser);
 
-    res.status(200).json({ message: "User information updated successfully." });
-  } catch (error) {
-    console.error("Error updating user information:", error);
-    res.status(500).json({ error: "Internal server error" });
+      res
+        .status(200)
+        .json({ message: "User information updated successfully." });
+    } catch (error) {
+      console.error("Error updating user information:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
   }
-});
+);
 
 router.get(
   "/leader",

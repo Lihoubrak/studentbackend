@@ -1,38 +1,22 @@
 const express = require("express");
 const { firestore } = require("../firebase/firebase");
+const { checkRole } = require("../middleware/authenticateToken");
 const router = express.Router();
 router.post("/create", async (req, res) => {
   try {
     const {
       date = new Date().toISOString().split("T")[0],
-      typePayMoney = "Card",
+      typePayMoney = "Cash",
       userId,
       eventId,
     } = req.body;
-
-    // Check if the user has already registered for the event
-    const existingParticipantEvent = await firestore
-      .collection("participantEvents")
-      .where("UserId", "==", userId)
-      .where("EventId", "==", eventId)
-      .get();
-
-    if (!existingParticipantEvent.empty) {
-      return res
-        .status(400)
-        .json({ error: "User already registered for the event" });
-    }
-
     // Retrieve the event document from the "events" collection
     const eventRef = await firestore.collection("events").doc(eventId).get();
-
     if (!eventRef.exists) {
       return res.status(404).json({ error: "Event not found" });
     }
-
     // Extract the price from the event document
-    const eventPrice = eventRef.data().ticketPrice;
-
+    const eventPrice = eventRef.data().paymentPerStudent;
     // Create a new document in the "participantEvents" collection
     const newParticipantEventRef = await firestore
       .collection("participantEvents")
@@ -153,5 +137,39 @@ router.delete("/delete/:participantEventId", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+router.post(
+  "/check",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const { eventId } = req.body;
+      const userId = req.user.id;
+      // Check if the user has already registered for the event
+      const existingParticipantEvent = await firestore
+        .collection("participantEvents")
+        .where("UserId", "==", userId)
+        .where("EventId", "==", eventId)
+        .get();
+      console.log(
+        existingParticipantEvent.docs.map((participant) => participant.data())
+      );
+      // If the user is already registered, return an error response
+      if (!existingParticipantEvent.empty) {
+        return res.status(400).json({
+          alreadyRegistered: true,
+          message: "User already registered for the event",
+        });
+      }
 
+      // If the user is not registered, return success response
+      res.status(200).json({
+        alreadyRegistered: false,
+        message: "User not registered for the event",
+      });
+    } catch (error) {
+      console.error("Error checking participant event registration:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
 module.exports = router;

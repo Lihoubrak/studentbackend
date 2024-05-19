@@ -4,11 +4,9 @@ const { firestore } = require("../firebase/firebase");
 const checkPassportEntered = require("../utils/checkPassportEntered");
 const upload = require("../middleware/uploadImage");
 const router = express.Router();
-const admin = require("firebase-admin");
-const sendPushNotifications = require("../utils/sendPushNotifications");
 router.post(
   "/create",
-  checkRole(["STUDENT"]),
+  checkRole(["STUDENT", "SCH", "KTX", "Admin"]),
   upload.single("image"),
   async (req, res) => {
     try {
@@ -50,6 +48,10 @@ router.post(
         isApprove: false,
         isRequestEdit: false,
         image: imageUrl,
+        visa: {
+          validityDate: "",
+          untilDate: "",
+        },
       });
 
       const newPassportDoc = await newPassportRef.get();
@@ -62,8 +64,41 @@ router.post(
     }
   }
 );
+router.put("/update/visa/:userId", checkRole(["KTX"]), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { visaUntilDate, visaValidityDate } = req.body;
+    // Tìm và cập nhật thông tin visa trong Firestore
+    const passportQuery = firestore
+      .collection("passports")
+      .where("UserId", "==", userId);
+    const passportSnapshot = await passportQuery.get();
 
-router.get("/detail/:userId", async (req, res) => {
+    if (passportSnapshot.empty) {
+      return res
+        .status(404)
+        .json({ error: "Passport not found for this user." });
+    }
+
+    const passportDoc = passportSnapshot.docs[0];
+    const passportRef = passportDoc.ref;
+
+    await passportRef.update({
+      "visa.untilDate": new Date(visaUntilDate),
+      "visa.validityDate": new Date(visaValidityDate),
+    });
+
+    const updatedPassportDoc = await passportRef.get();
+    const updatedPassportData = updatedPassportDoc.data();
+
+    res.status(200).json(updatedPassportData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+router.get("/detail/:userId", checkRole(["KTX"]), async (req, res) => {
   try {
     const userId = req.params.userId;
     const passportSnapshot = await firestore
@@ -88,22 +123,33 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
     const { year } = req.query;
     const userId = req.user.id;
 
-    const dormitoriesSnapshot = await firestore
-      .collection("dormitories")
-      .where("managers", "array-contains", userId)
-      .get();
+    const rolesArray = [
+      { id: 1, roleName: "Admin" },
+      { id: 2, roleName: "Manager" },
+      { id: 3, roleName: "User" },
+      // Add more roles as needed
+    ];
 
     const roomIds = [];
-    // Fetch room IDs for each dormitory
-    for (const doc of dormitoriesSnapshot.docs) {
-      const dormitoryId = doc.id;
-      const roomsSnapshot = await firestore
-        .collection("rooms")
-        .where("DormitoryId", "==", dormitoryId)
+
+    // Iterate over rolesArray
+    for (const role of rolesArray) {
+      const dormitoriesSnapshot = await firestore
+        .collection("dormitories")
+        .where("managers", "array-contains", { userId, role: role.roleName })
         .get();
-      roomsSnapshot.forEach((roomDoc) => {
-        roomIds.push(roomDoc.id);
-      });
+
+      // Fetch room IDs for each dormitory
+      for (const doc of dormitoriesSnapshot.docs) {
+        const dormitoryId = doc.id;
+        const roomsSnapshot = await firestore
+          .collection("rooms")
+          .where("DormitoryId", "==", dormitoryId)
+          .get();
+        roomsSnapshot.forEach((roomDoc) => {
+          roomIds.push(roomDoc.id);
+        });
+      }
     }
 
     // Fetch users based on roomIds and year
@@ -127,17 +173,29 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
       let requestEdit = false;
       let isApprove = false;
       let passportEntered = false;
+      let isVisaExpired = false; // Add this field
 
       if (!passportSnapshot.empty) {
         const {
           image,
           isApprove: passportIsApprove,
           isRequestEdit: passportIsRequestEdit,
+          visa: { untilDate: visaUntilDate },
         } = passportSnapshot.docs[0].data();
+
         passportImage = image;
         isApprove = passportIsApprove;
         requestEdit = passportIsRequestEdit;
         passportEntered = await checkPassportEntered(doc);
+
+        const twoMonthsBeforeNow = new Date();
+        twoMonthsBeforeNow.setMonth(twoMonthsBeforeNow.getMonth() - 2);
+
+        // Check if visa expires within the next two months
+        if (visaUntilDate.toDate() > twoMonthsBeforeNow) {
+          // Visa expires within the next two months
+          isVisaExpired = true;
+        }
       } else {
         passportEntered = await checkPassportEntered(doc);
       }
@@ -150,6 +208,7 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
         requestEdit,
         isApprove,
         passportEntered,
+        isVisaExpired, // Include the isVisaExpired field in the response
       });
     }
 
@@ -307,28 +366,33 @@ router.put("/approve/:userId", checkRole(["KTX"]), async (req, res) => {
 });
 
 //for Application
-router.get("/all", checkRole(["STUDENT"]), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    // Query the passport collection to find the passport associated with the user
-    const passportSnapshot = await firestore
-      .collection("passports")
-      .where("UserId", "==", userId)
-      .get();
-    // Check if the passport exists
-    if (passportSnapshot.empty) {
-      return res
-        .status(404)
-        .json({ error: "Passport not found for this user." });
-    }
+router.get(
+  "/all",
+  checkRole(["STUDENT", "SCH", "KTX", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      // Query the passport collection to find the passport associated with the user
+      const passportSnapshot = await firestore
+        .collection("passports")
+        .where("UserId", "==", userId)
+        .get();
+      // Check if the passport exists
+      if (passportSnapshot.empty) {
+        return res
+          .status(404)
+          .json({ error: "Passport not found for this user." });
+      }
 
-    // Assuming there's only one passport associated with a user
-    const passportDoc = passportSnapshot.docs[0];
-    const passportData = passportDoc.data();
-    res.status(200).json({ id: passportDoc.id, ...passportData });
-  } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+      // Assuming there's only one passport associated with a user
+      const passportDoc = passportSnapshot.docs[0];
+      const passportData = passportDoc.data();
+      res.status(200).json({ id: passportDoc.id, ...passportData });
+    } catch (error) {
+      console.error("Error:", error);
+      res.status(500).json({ error: "Internal Server Error" });
+    }
   }
-});
+);
+
 module.exports = router;

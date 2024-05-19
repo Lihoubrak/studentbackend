@@ -9,114 +9,182 @@ router.post(
   "/create",
   checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
   async (req, res) => {
-    const { content, receiverId } = req.body;
-    const senderId = req.user.id;
-    const receiverRef = await firestore.collection("users").doc(receiverId);
     try {
-      // Check if a conversation between the sender and receiver already exists
-      const conversationsSnapshot = await firestore
-        .collection("conversations")
-        .where("participants", "array-contains", senderId)
+      const { receiverId, content } = req.body;
+      const senderId = req.user.id;
+      if (!senderId || !receiverId || !content) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+      const messageRef = await firestore.collection("messages").add({
+        senderId,
+        receiverId,
+        content,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        seenBy: {
+          [senderId]: true,
+          [receiverId]: false, // Initially, the message is not seen by the receiver
+        },
+      });
+      const userSnapshot = await firestore
+        .collection("users")
+        .doc(receiverId)
+        .get();
+      if (userSnapshot.exists) {
+        const userData = userSnapshot.data();
+        if (userData && userData.expo_push_token) {
+          await sendPushNotifications(
+            [userData.expo_push_token],
+            "New Message",
+            content,
+            receiverId,
+            "chat"
+          );
+        }
+      }
+      res.status(201).json({
+        message: "Message sent successfully",
+        messageId: messageRef.id,
+      });
+    } catch (error) {
+      console.error("Error sending message:", error);
+      res.status(500).json({ message: "Server Error" });
+    }
+  }
+);
+// Route to get the list of users the current user has chatted with, along with the last message
+router.get(
+  "/last-message-users",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+
+      // Truy vấn để lấy tất cả các tin nhắn mà người dùng hiện tại là người gửi hoặc người nhận
+      const sentMessagesSnapshot = await firestore
+        .collection("messages")
+        .where("senderId", "==", userId)
+        .orderBy("timestamp", "desc")
         .get();
 
-      let conversationRef;
-      let conversationId;
+      const receivedMessagesSnapshot = await firestore
+        .collection("messages")
+        .where("receiverId", "==", userId)
+        .orderBy("timestamp", "desc")
+        .get();
 
-      // Find an existing conversation where both users are participants
-      conversationsSnapshot.forEach((conversationDoc) => {
-        const participants = conversationDoc.data().participants;
+      const lastMessages = {};
 
-        // Check if receiverRef is included in the participants' references
-        const receiverIsParticipant = participants.some((participant) => {
-          return participant === receiverId;
-        });
+      // Lặp qua các tin nhắn đã gửi để lấy tin nhắn cuối cùng cho mỗi người nhận
+      sentMessagesSnapshot.forEach((doc) => {
+        const message = doc.data();
+        const receiverId = message.receiverId;
 
-        if (receiverIsParticipant) {
-          // If receiver is a participant, set conversationRef to the current conversation
-          conversationRef = conversationDoc.ref;
-          conversationId = conversationDoc.id;
+        if (!lastMessages[receiverId]) {
+          lastMessages[receiverId] = message;
         }
       });
 
-      if (conversationRef) {
-        // If conversation exists, send the message to the existing conversation
-        const messageRef = await firestore.collection("messages").add({
-          content,
-          SenderId: senderId,
-          ReceiverId: receiverId,
-          ConversationId: conversationId,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          seenBySender: true,
-          seenByReceiver: false,
-        });
+      // Lặp qua các tin nhắn đã nhận để lấy tin nhắn cuối cùng từ mỗi người gửi
+      receivedMessagesSnapshot.forEach((doc) => {
+        const message = doc.data();
+        const senderId = message.senderId;
 
-        // Update the lastMessage and lastMessageTime fields in the conversation
-        await conversationRef.update({
-          lastMessage: content,
-          lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        // Get receiver's tokenIds for push notification
-        const receiverSnapshot = await receiverRef.get();
-        const receiverData = receiverSnapshot.data();
-        const expo_push_token = receiverData.expo_push_token || [];
-        // Send push notifications to receiver
-        await sendPushNotifications(
-          [expo_push_token],
-          "New Chat Message",
-          "You have received a new chat message",
-          receiverSnapshot.id,
-          "chat"
-        );
+        if (!lastMessages[senderId]) {
+          lastMessages[senderId] = message;
+        }
+      });
 
-        res.status(201).json({
-          message: "Message sent successfully",
-          messageId: messageRef.id,
-          conversationId: conversationRef,
-        });
-      } else {
-        // If conversation doesn't exist, create a new conversation
-        const newConversationRef = await firestore
-          .collection("conversations")
-          .add({
-            participants: [senderId, receiverId],
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            lastMessage: content,
-            lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
+      // Chuyển đổi đối tượng lastMessages thành một mảng
+      const lastMessagesArray = Object.values(lastMessages);
+
+      res.json(lastMessagesArray);
+    } catch (error) {
+      console.error("Error fetching last messages:", error);
+      res.status(500).json({ message: "Server Error" });
+    }
+  }
+);
+
+// Route to get all messages between two users
+router.get(
+  "/message-between-users/:userId2",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const { userId2 } = req.params;
+      const userId1 = req.user.id;
+
+      // Fetch messages between the two users
+      const messagesSnapshot = await firestore
+        .collection("messages")
+        .where("senderId", "in", [userId1, userId2])
+        .where("receiverId", "in", [userId1, userId2])
+        .orderBy("timestamp", "asc")
+        .get();
+
+      const messages = [];
+      messagesSnapshot.forEach((doc) => {
+        messages.push(doc.data());
+      });
+
+      // Update seen status of messages sent to the current user by userId2
+      await firestore
+        .collection("messages")
+        .where("senderId", "==", userId2)
+        .where("receiverId", "==", userId1)
+        .get()
+        .then((querySnapshot) => {
+          const batch = firestore.batch();
+
+          querySnapshot.forEach((doc) => {
+            const messageRef = firestore.collection("messages").doc(doc.id);
+            const seenBy = doc.data().seenBy || {};
+            seenBy[userId1] = true;
+            batch.update(messageRef, { seenBy });
           });
 
-        // Send the message to the new conversation
-        const messageRef = await firestore.collection("messages").add({
-          content,
-          SenderId: senderId,
-          ReceiverId: receiverId,
-          ConversationId: newConversationRef.id,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          seenBySender: true,
-          seenByReceiver: false,
+          return batch.commit();
         });
-        // Get receiver's tokenIds for push notification
-        const receiverSnapshot = await receiverRef.get();
-        const receiverData = receiverSnapshot.data();
-        const expo_push_token = receiverData.expo_push_token || [];
 
-        // Send push notifications to receiver
-        await sendPushNotifications(
-          [expo_push_token],
-          "New Chat Message",
-          "You have received a new chat message",
-          receiverSnapshot.id,
-          "chat"
-        );
-
-        res.status(201).json({
-          message: "Message sent successfully",
-          messageId: messageRef.id,
-          conversationId: newConversationRef.id,
-        });
-      }
+      res.json(messages);
     } catch (error) {
-      console.error(error);
+      console.error("Error fetching messages:", error);
       res.status(500).json({ message: "Server Error" });
+    }
+  }
+);
+
+// Route to update seen status of messages sent to the current user by a specific sender
+router.put(
+  "/seen-from/:senderId",
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
+  async (req, res) => {
+    try {
+      const { senderId } = req.params;
+      const receiverId = req.user.id;
+
+      const messagesSnapshot = await firestore
+        .collection("messages")
+        .where("senderId", "==", senderId)
+        .where("receiverId", "==", receiverId)
+        .get();
+
+      const batch = firestore.batch();
+
+      for (const doc of messagesSnapshot.docs) {
+        const messageRef = firestore.collection("messages").doc(doc.id);
+        const seenBy = doc.data().seenBy || {};
+
+        seenBy[receiverId] = true;
+        batch.update(messageRef, { seenBy });
+      }
+
+      await batch.commit();
+
+      res.json({ message: "Messages marked as seen" });
+    } catch (error) {
+      console.error("Error marking messages as seen:", error);
+      res.status(500).json({ message: "Server Error", error: error.message });
     }
   }
 );
@@ -245,151 +313,4 @@ router.get(
   }
 );
 
-router.get(
-  "/users-with-conversations",
-  checkRole(["Admin", "STUDENT", "SCH", "KTX"]),
-  async (req, res) => {
-    try {
-      const usersWithConversations = [];
-
-      const conversationsSnapshot = await firestore
-        .collection("conversations")
-        .get();
-      const userIds = new Set();
-
-      conversationsSnapshot.forEach((conversationDoc) => {
-        const conversationData = conversationDoc.data();
-        conversationData.participants.forEach((participantRef) => {
-          userIds.add(participantRef.id);
-        });
-      });
-
-      const promises = Array.from(userIds).map(async (userId) => {
-        if (userId !== req.user.id) {
-          const userDataSnapshot = await firestore
-            .collection("users")
-            .doc(userId)
-            .get();
-          const userData = userDataSnapshot.data();
-
-          const userConversationsSnapshot = await firestore
-            .collection("conversations")
-            .where(
-              "participants",
-              "array-contains",
-              firestore.doc(`users/${userId}`)
-            )
-            .get();
-
-          const conversations = [];
-
-          for (const conversationDoc of userConversationsSnapshot.docs) {
-            const conversationData = conversationDoc.data();
-            const conversationId = conversationDoc.id;
-
-            const lastMessageSnapshot = await firestore
-              .collection("messages")
-              .where(
-                "ConversationId",
-                "==",
-                firestore.doc(`conversations/${conversationId}`)
-              )
-              .orderBy("createdAt", "desc")
-              .limit(1)
-              .get();
-
-            let hasSeenMessage = false;
-            lastMessageSnapshot.forEach((messageDoc) => {
-              const messageData = messageDoc.data();
-              if (
-                messageData.ReceiverId.id === userId &&
-                messageData.seenByReceiver
-              ) {
-                hasSeenMessage = true;
-              }
-            });
-
-            conversations.push({
-              id: conversationId,
-              participants: conversationData.participants,
-              createdAt: conversationData.createdAt,
-              lastMessage: conversationData.lastMessage,
-              lastMessageTime: conversationData.lastMessageTime,
-              hasSeenMessage: hasSeenMessage,
-            });
-          }
-
-          usersWithConversations.push({
-            id: userId,
-            firstName: userData.firstName,
-            lastName: userData.lastName,
-            avatar: userData.avatar,
-            conversations: conversations,
-          });
-        }
-      });
-
-      await Promise.all(promises);
-
-      res.status(200).json(usersWithConversations);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Server Error" });
-    }
-  }
-);
-
-router.put(
-  "/update-status-seen/:messageId",
-  checkRole(["KTX", "SCH", "STUDENT"]),
-  async (req, res) => {
-    const { messageId } = req.params;
-    const receiverId = req.user.id;
-    try {
-      const messageRef = firestore.collection("messages").doc(messageId);
-      const messageSnapshot = await messageRef.get();
-
-      // Check if the message exists
-      if (!messageSnapshot.exists) {
-        return res.status(404).json({ message: "Message not found" });
-      }
-
-      const messageData = messageSnapshot.data();
-
-      // Check if the message belongs to the receiver
-      if (messageData.ReceiverId !== receiverId) {
-        return res
-          .status(403)
-          .json({ message: "You are not authorized to update this message" });
-      }
-
-      // Update seen by receiver to true
-      await messageRef.update({
-        seenByReceiver: true,
-      });
-
-      res.status(200).json({ message: "Message seen by receiver" });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Server Error" });
-    }
-  }
-);
-
-router.get("/number-message", checkRole(["STUDENT"]), async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const user = await User.findByPk(userId);
-    const numberMessageNotYetSeen = await Message.count({
-      where: {
-        seen_by_user2: false,
-        receiver_id: user.id,
-      },
-    });
-    res.status(200).json({ count: numberMessageNotYetSeen });
-  } catch (error) {
-    console.error("Error fetching number of messages:", error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-});
 module.exports = router;

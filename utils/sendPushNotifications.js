@@ -1,4 +1,6 @@
 const { Expo } = require("expo-server-sdk");
+const { convert } = require("html-to-text");
+
 const sendPushNotifications = async (
   tokenIds,
   title,
@@ -8,19 +10,25 @@ const sendPushNotifications = async (
 ) => {
   // Create a new Expo SDK client
   const expo = new Expo();
+  // Convert HTML content to plain text
+  const plainTextContent = convert(content, {
+    wordwrap: 130,
+  });
 
   // Prepare the messages to be sent
   const messages = tokenIds.map((tokenId) => ({
-    to: [tokenId], // Convert tokenId to an array
+    to: tokenId, // TokenId as a string (no need for array)
     sound: "default",
     title: title + " 📬",
-    body: content,
+    body: plainTextContent,
     data: {
       screen:
         type === "chat"
           ? "messagechat"
           : type === "passport"
           ? "passport"
+          : type === "tabBottomBar"
+          ? "tabBottomBar"
           : "notificationdetail",
       notificationId: notificationId,
     },
