@@ -36,7 +36,7 @@ router.post(
             [userData.expo_push_token],
             "New Message",
             content,
-            receiverId,
+            senderId,
             "chat"
           );
         }
