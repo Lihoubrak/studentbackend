@@ -6,7 +6,7 @@ const router = express.Router();
 const admin = require("firebase-admin");
 router.post(
   "/create",
-  checkRole(["KTX", "SCH"]),
+  checkRole(["KTX", "SCH", "Admin"]),
   upload.single("logo"),
   async (req, res) => {
     try {

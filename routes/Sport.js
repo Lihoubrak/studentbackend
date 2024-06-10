@@ -54,6 +54,7 @@ router.get(
   async (req, res) => {
     try {
       const sportId = req.params.sportId;
+
       const sportRef = await firestore.collection("sports").doc(sportId).get();
       if (!sportRef.exists) {
         return res.status(404).json({ error: "Sport not found" });

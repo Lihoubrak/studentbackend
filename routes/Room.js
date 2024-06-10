@@ -430,7 +430,7 @@ router.get(
   checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
   async (req, res) => {
     try {
-      const userId = req.user.id;
+      const userId = req.params.userId;
 
       if (!userId) {
         return res.status(400).json({ error: "User ID is required." });

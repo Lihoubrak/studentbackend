@@ -3,7 +3,7 @@ const { firestore } = require("../firebase/firebase");
 const { checkRole } = require("../middleware/authenticateToken");
 const router = express.Router();
 const admin = require("firebase-admin");
-router.post("/create", checkRole(["KTX", "SCH"]), async (req, res) => {
+router.post("/create", checkRole(["KTX", "SCH", "Admin"]), async (req, res) => {
   try {
     const { playerPosition, playerDescription, userId, teamSportId } = req.body;
     const existingPlayer = await firestore
@@ -34,7 +34,7 @@ router.post("/create", checkRole(["KTX", "SCH"]), async (req, res) => {
 });
 router.delete(
   "/delete/:playerId",
-  checkRole(["KTX", "SCH"]),
+  checkRole(["KTX", "SCH", "Admin"]),
   async (req, res) => {
     try {
       const playerId = req.params.playerId;

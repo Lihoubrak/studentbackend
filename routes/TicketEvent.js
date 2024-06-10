@@ -6,7 +6,7 @@ const router = express.Router();
 const admin = require("firebase-admin");
 router.post(
   "/create",
-  checkRole(["KTX", "SCH", "STUDENT"]),
+  checkRole(["KTX", "SCH", "STUDENT", "Admin"]),
   async (req, res) => {
     try {
       const {
@@ -83,13 +83,39 @@ router.delete("/delete/:ticketId", async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
+    const ticketData = ticketDoc.data();
+    const { EventId, numberOfTicket } = ticketData;
+
     // Delete the ticket
     await ticketRef.delete();
 
-    res.status(200).json({ message: "Ticket deleted successfully" });
+    // Get the event reference
+    const eventRef = firestore.collection("events").doc(EventId);
+
+    // Update the event's available tickets
+    await firestore.runTransaction(async (transaction) => {
+      const eventDoc = await transaction.get(eventRef);
+
+      if (!eventDoc.exists) {
+        throw new Error("Event not found");
+      }
+
+      const event = eventDoc.data();
+      const updatedAvailableTickets =
+        (event.numberOfTicket || 0) + parseInt(numberOfTicket);
+
+      transaction.update(eventRef, {
+        numberOfTicket: updatedAvailableTickets,
+      });
+    });
+
+    res
+      .status(200)
+      .json({ message: "Ticket deleted and event updated successfully" });
   } catch (error) {
     console.error("Error deleting ticket:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 module.exports = router;

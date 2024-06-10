@@ -19,7 +19,6 @@ router.post("/register", async (req, res) => {
       phoneNumber,
       facebook,
       zalo,
-      avatar,
       expo_push_token,
       room,
       degree,
@@ -106,7 +105,7 @@ router.post("/register", async (req, res) => {
       graduate: false,
       leftRoomYear: new Date().getFullYear(),
       avatar:
-        gender === "Male"
+        gender === "Male" || gender === "ប្រុស"
           ? `${req.protocol}://${req.get("host")}/boy.png`
           : `${req.protocol}://${req.get("host")}/human.png`,
       expo_push_token: expo_push_token || null,
@@ -123,7 +122,6 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ error: "Internal server error." });
   }
 });
-
 router.post("/login", async (req, res) => {
   try {
     const { username, password, expoToken } = req.body;
@@ -197,10 +195,120 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ error: "Internal server error." });
   }
 });
+//   try {
+//     const querySnapshot = await firestore.collection("users").get();
+//     const allStudents = [];
 
+//     for (const doc of querySnapshot.docs) {
+//       const studentData = doc.data();
+
+//       delete studentData.password;
+//       delete studentData.expo_push_token;
+
+//       const roomRef = studentData.RoomId;
+//       const majorRef = studentData.MajorId;
+
+//       if (!roomRef && !majorRef) {
+//         allStudents.push({
+//           id: doc.id,
+//           ...studentData,
+//           Room: null,
+//           Major: null,
+//           School: null,
+//         });
+//         continue;
+//       }
+
+//       const roomData = roomRef
+//         ? (await firestore.collection("rooms").doc(roomRef).get()).data()
+//         : null;
+//       const majorData = majorRef
+//         ? (await firestore.collection("majors").doc(majorRef).get()).data()
+//         : null;
+//       const dormitoryData =
+//         roomData && roomData.DormitoryId
+//           ? (
+//               await firestore
+//                 .collection("dormitories")
+//                 .doc(roomData.DormitoryId)
+//                 .get()
+//             ).data()
+//           : null;
+//       const schoolData =
+//         majorData && majorData.SchoolId
+//           ? (
+//               await firestore
+//                 .collection("schools")
+//                 .doc(majorData.SchoolId)
+//                 .get()
+//             ).data()
+//           : null;
+
+//       const room = roomData
+//         ? {
+//             id: roomRef,
+//             roomNumber: roomData.roomNumber,
+//             numberOfStudents: roomData.numberOfStudents,
+//             Dormitory: dormitoryData
+//               ? {
+//                   id: roomData.DormitoryId,
+//                   dormName: dormitoryData.dormName,
+//                 }
+//               : null,
+//           }
+//         : null;
+
+//       const major = majorData
+//         ? {
+//             id: majorRef,
+//             majorName: majorData.majorName,
+//             School: schoolData
+//               ? {
+//                   id: majorData.SchoolId,
+//                   schoolName: schoolData.schoolName,
+//                 }
+//               : null,
+//           }
+//         : null;
+
+//       allStudents.push({
+//         id: doc.id,
+//         ...studentData,
+//         Room: room,
+//         Major: major,
+//       });
+//     }
+
+//     res.status(200).json(allStudents);
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ error: "Internal server error" });
+//   }
+// });
 router.get("/all", async (req, res) => {
+  const limit = parseInt(req.query.limit) || 6; // Default to 10 documents per page
+  const startAfter = req.query.startAfter || null; // Document ID to start after
+  const searchQuery = req.query.searchQuery || ""; // Search query for user names
+
   try {
-    const querySnapshot = await firestore.collection("users").get();
+    let query = firestore.collection("users").limit(limit);
+
+    if (startAfter) {
+      const startAfterDoc = await firestore
+        .collection("users")
+        .doc(startAfter)
+        .get();
+      query = query.startAfter(startAfterDoc);
+    }
+
+    // If there's a search query, adjust the query to filter based on the searchQuery
+    if (searchQuery) {
+      query = query
+        .where("firstName", ">=", searchQuery)
+        .where("firstName", "<=", searchQuery + "\uf8ff");
+    }
+
+    const querySnapshot = await query.get();
     const allStudents = [];
 
     for (const doc of querySnapshot.docs) {
@@ -283,13 +391,15 @@ router.get("/all", async (req, res) => {
       });
     }
 
-    res.status(200).json(allStudents);
+    const lastVisible = querySnapshot.docs[querySnapshot.docs.length - 1];
+    const nextPageToken = lastVisible ? lastVisible.id : null;
+
+    res.status(200).json({ students: allStudents, nextPageToken });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
-
 router.get("/all/manager", checkRole(["Admin"]), async (req, res) => {
   try {
     const { role } = req.query;

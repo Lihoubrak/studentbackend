@@ -17,9 +17,9 @@ router.post("/create", async (req, res) => {
     }
     // Extract the price from the event document
     const eventPrice = eventRef.data().paymentPerStudent;
-    // Create a new document in the "participantEvents" collection
+    // Create a new document in the "participantevents" collection
     const newParticipantEventRef = await firestore
-      .collection("participantEvents")
+      .collection("participantevents")
       .add({
         date,
         typePayMoney,
@@ -47,12 +47,12 @@ router.get("/all/:eventId", async (req, res) => {
     const eventId = req.params.eventId;
 
     // Retrieve all participant events for the specified event
-    const participantEventsSnapshot = await firestore
-      .collection("participantEvents")
+    const participanteventsSnapshot = await firestore
+      .collection("participantevents")
       .where("EventId", "==", eventId)
       .get();
 
-    if (participantEventsSnapshot.empty) {
+    if (participanteventsSnapshot.empty) {
       return res.status(404).json({
         error: "No participant events found for the given event.",
       });
@@ -60,7 +60,7 @@ router.get("/all/:eventId", async (req, res) => {
 
     // Extracting participant data from the snapshot
     const participants = [];
-    for (const doc of participantEventsSnapshot.docs) {
+    for (const doc of participanteventsSnapshot.docs) {
       const participantData = doc.data();
       const userId = participantData.UserId;
 
@@ -121,7 +121,7 @@ router.delete("/delete/:participantEventId", async (req, res) => {
 
     // Check if the participant event exists
     const participantEventRef = await firestore
-      .collection("participantEvents")
+      .collection("participantevents")
       .doc(participantEventId)
       .get();
 
@@ -146,7 +146,7 @@ router.post(
       const userId = req.user.id;
       // Check if the user has already registered for the event
       const existingParticipantEvent = await firestore
-        .collection("participantEvents")
+        .collection("participantevents")
         .where("UserId", "==", userId)
         .where("EventId", "==", eventId)
         .get();
