@@ -117,11 +117,11 @@ router.get("/detail/:userId", checkRole(["KTX"]), async (req, res) => {
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
-
 router.get("/list", checkRole(["KTX"]), async (req, res) => {
   try {
-    const { year } = req.query;
+    const { year, lastVisible, name } = req.query;
     const userId = req.user.id;
+    const limit = 6;
 
     const rolesArray = [
       { id: 4, roleName: "Economics Leader" },
@@ -134,14 +134,13 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
 
     const roomIds = [];
 
-    // Iterate over rolesArray
+    // Fetch room IDs based on roles
     for (const role of rolesArray) {
       const dormitoriesSnapshot = await firestore
         .collection("dormitories")
         .where("managers", "array-contains", { userId, role: role.roleName })
         .get();
 
-      // Fetch room IDs for each dormitory
       for (const doc of dormitoriesSnapshot.docs) {
         const dormitoryId = doc.id;
         const roomsSnapshot = await firestore
@@ -154,64 +153,109 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
       }
     }
 
-    // Fetch users based on roomIds and year
-    const usersSnapshot = await firestore
-      .collection("users")
-      .where("RoomId", "in", roomIds)
-      .where("userDate", ">=", new Date(`${year}-01-01`))
-      .where("userDate", "<=", new Date(`${year}-12-31`))
-      .get();
+    // Split the roomIds into chunks of 10
+    const chunkArray = (array, size) => {
+      const chunkedArray = [];
+      for (let i = 0; i < array.length; i += size) {
+        chunkedArray.push(array.slice(i, i + size));
+      }
+      return chunkedArray;
+    };
 
+    const roomChunks = chunkArray(roomIds, 6);
     const userList = [];
-    // Construct user list
-    for (const doc of usersSnapshot.docs) {
-      const { firstName, lastName } = doc.data();
-      const passportSnapshot = await firestore
-        .collection("passports")
-        .where("UserId", "==", doc.id)
-        .get();
+    let lastFetchedUser = null;
 
-      let passportImage = null;
-      let requestEdit = false;
-      let isApprove = false;
-      let passportEntered = false;
-      let isVisaExpired = false; // Add this field
+    // Fetch users in batches
+    for (const chunk of roomChunks) {
+      let query = firestore
+        .collection("users")
+        .where("RoomId", "in", chunk)
+        .where("userDate", ">=", new Date(`${year}-01-01`))
+        .where("userDate", "<=", new Date(`${year}-12-31`))
+        .limit(limit);
 
-      if (!passportSnapshot.empty) {
-        const {
-          image,
-          isApprove: passportIsApprove,
-          isRequestEdit: passportIsRequestEdit,
-          visa: { untilDate: visaUntilDate },
-        } = passportSnapshot.docs[0].data();
-
-        passportImage = image;
-        isApprove = passportIsApprove;
-        requestEdit = passportIsRequestEdit;
-        passportEntered = await checkPassportEntered(doc);
-
-        const twoMonthsBeforeNow = new Date();
-        twoMonthsBeforeNow.setMonth(twoMonthsBeforeNow.getMonth() - 2);
-
-        // Check if visa expires within the next two months
-        if (visaUntilDate.toDate() > twoMonthsBeforeNow) {
-          // Visa expires within the next two months
-          isVisaExpired = true;
+      if (lastVisible) {
+        const lastDoc = await firestore
+          .collection("users")
+          .doc(lastVisible)
+          .get();
+        if (lastDoc.exists) {
+          query = query.startAfter(lastDoc);
         }
-      } else {
-        passportEntered = await checkPassportEntered(doc);
       }
 
-      userList.push({
-        id: doc.id,
-        firstName,
-        lastName,
-        passportImage,
-        requestEdit,
-        isApprove,
-        passportEntered,
-        isVisaExpired, // Include the isVisaExpired field in the response
-      });
+      if (name) {
+        query = query
+          .where("firstName", ">=", name)
+          .where("firstName", "<=", name + "\uf8ff");
+      }
+
+      const usersSnapshot = await query.get();
+
+      // Process each user
+      for (const doc of usersSnapshot.docs) {
+        const { firstName, lastName } = doc.data();
+        const passportSnapshot = await firestore
+          .collection("passports")
+          .where("UserId", "==", doc.id)
+          .get();
+
+        let passportImage = null;
+        let requestEdit = false;
+        let isApprove = false;
+        let passportEntered = false;
+        let isVisaExpired = false;
+
+        if (!passportSnapshot.empty) {
+          const {
+            image,
+            isApprove: passportIsApprove,
+            isRequestEdit: passportIsRequestEdit,
+            visa: { untilDate: visaUntilDate },
+          } = passportSnapshot.docs[0].data();
+
+          passportImage = image;
+          isApprove = passportIsApprove;
+          requestEdit = passportIsRequestEdit;
+          passportEntered = await checkPassportEntered(doc);
+
+          const twoMonthsBeforeNow = new Date();
+          twoMonthsBeforeNow.setMonth(twoMonthsBeforeNow.getMonth() - 2);
+
+          // Convert visaUntilDate to a JavaScript Date object if it's not already
+          const visaDate =
+            visaUntilDate instanceof Date
+              ? visaUntilDate
+              : visaUntilDate.toDate
+              ? visaUntilDate.toDate()
+              : new Date(visaUntilDate);
+
+          if (visaDate < twoMonthsBeforeNow) {
+            isVisaExpired = true;
+          }
+        } else {
+          passportEntered = await checkPassportEntered(doc);
+        }
+
+        userList.push({
+          id: doc.id,
+          firstName,
+          lastName,
+          passportImage,
+          requestEdit,
+          isApprove,
+          passportEntered,
+          isVisaExpired,
+        });
+
+        lastFetchedUser = doc;
+      }
+
+      // Stop processing more chunks if we have already reached the limit
+      if (userList.length >= limit) {
+        break;
+      }
     }
 
     if (userList.length === 0) {
@@ -220,7 +264,10 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
         .json({ message: "No users found for the specified criteria." });
     }
 
-    res.status(200).json(userList);
+    res.status(200).json({
+      users: userList,
+      lastVisible: lastFetchedUser ? lastFetchedUser.id : null,
+    });
   } catch (error) {
     console.error("Error:", error);
     res.status(500).json({ error: "Internal Server Error" });

@@ -62,6 +62,10 @@ const scheduleCronJob = () => {
       console.log("Running cron job once every month");
       await runCronJob();
     });
+    // cronJob = cron.schedule("* * * * *", async () => {
+    //   console.log("Running cron job every minute");
+    //   await runCronJob();
+    // });
   }
 };
 // Start the cron job immediately when the server starts

@@ -11,11 +11,9 @@ const runCronJob = async () => {
     const promises = passportsSnapshot.docs.map(async (doc) => {
       const passportData = doc.data();
       const visaUntilDate = passportData.visa.untilDate.toDate();
-
       // Check if visaUntilDate is within the next two months
-      if (visaUntilDate > twoMonthsBeforeNow) {
+      if (visaUntilDate < twoMonthsBeforeNow) {
         const userId = passportData.UserId;
-
         // Get user's Expo push token
         const userSnapshot = await firestore
           .collection("users")

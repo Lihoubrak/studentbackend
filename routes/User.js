@@ -289,7 +289,7 @@ router.get("/all", async (req, res) => {
   const limit = parseInt(req.query.limit) || 6; // Default to 10 documents per page
   const startAfter = req.query.startAfter || null; // Document ID to start after
   const searchQuery = req.query.searchQuery || ""; // Search query for user names
-
+  console.log(searchQuery);
   try {
     let query = firestore.collection("users").limit(limit);
 
@@ -304,8 +304,8 @@ router.get("/all", async (req, res) => {
     // If there's a search query, adjust the query to filter based on the searchQuery
     if (searchQuery) {
       query = query
-        .where("firstName", ">=", searchQuery)
-        .where("firstName", "<=", searchQuery + "\uf8ff");
+        .where("firstName", ">=", searchQuery.trim()) // Trim searchQuery to remove any extra spaces
+        .where("firstName", "<=", searchQuery.trim() + "\uf8ff");
     }
 
     const querySnapshot = await query.get();

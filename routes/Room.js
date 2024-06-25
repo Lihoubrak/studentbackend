@@ -387,44 +387,95 @@ router.get(
   }
 );
 
-//Material For Students
-// router.post(
-//   "/material",
-//   checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
-//   async (req, res) => {
-//     try {
-//       const { materials } = req.body;
-//       const userId = req.user.id;
-//       if (!userId || !materials) {
-//         return res.status(400).json({ error: "All fields are required." });
-//       }
+router.post(
+  "/material/create-for-all",
+  checkRole(["KTX"]),
+  async (req, res) => {
+    try {
+      const { dormId, materials } = req.body;
+      if (!dormId || !materials) {
+        return res.status(400).json({ error: "All fields are required." });
+      }
 
-//       // Check if there's an existing document for the user
-//       const userMaterialsRef = firestore
-//         .collection("usermaterials")
-//         .doc(userId);
-//       const userMaterialsDoc = await userMaterialsRef.get();
+      // Fetch all rooms in the specified dormitory
+      const roomsSnapshot = await firestore
+        .collection("rooms")
+        .where("DormitoryId", "==", dormId)
+        .get();
 
-//       // If the document exists, update it with the new materials
-//       if (userMaterialsDoc.exists) {
-//         await userMaterialsRef.update({
-//           materials: materials,
-//         });
-//       } else {
-//         // If the document doesn't exist, create a new one
-//         await userMaterialsRef.set({
-//           UserId: userId,
-//           materials,
-//         });
-//       }
+      const batch = firestore.batch();
 
-//       res.status(201).json({ message: "Materials updated successfully." });
-//     } catch (error) {
-//       console.error("Error updating materials:", error);
-//       res.status(500).json({ error: "Internal server error." });
-//     }
-//   }
-// );
+      // Array to collect promises of batch.set operations
+      const batchPromises = [];
+
+      // Fetch all users associated with each room and update materials
+      for (const roomDoc of roomsSnapshot.docs) {
+        const roomUsersSnapshot = await firestore
+          .collection("users")
+          .where("RoomId", "==", roomDoc.id)
+          .get();
+
+        roomUsersSnapshot.forEach((userDoc) => {
+          const userId = userDoc.id;
+
+          // Query for user materials based on UserId
+          const userMaterialsQuery = firestore
+            .collection("usermaterials")
+            .where("UserId", "==", userId);
+
+          // Execute the query and collect the document references
+          batchPromises.push(
+            userMaterialsQuery.get().then((userMaterialsSnapshot) => {
+              if (!userMaterialsSnapshot.empty) {
+                // Document exists, update it using batch
+                userMaterialsSnapshot.forEach((doc) => {
+                  const userMaterialsRef = firestore
+                    .collection("usermaterials")
+                    .doc(doc.id);
+                  batch.set(
+                    userMaterialsRef,
+                    {
+                      UserId: userId,
+                      materials,
+                    },
+                    { merge: true }
+                  );
+                });
+              } else {
+                // Document does not exist, create it using batch
+                const userMaterialsRef = firestore
+                  .collection("usermaterials")
+                  .doc();
+                batch.set(
+                  userMaterialsRef,
+                  {
+                    UserId: userId,
+                    materials,
+                  },
+                  { merge: true }
+                );
+              }
+            })
+          );
+        });
+      }
+
+      // Execute all batch operations concurrently
+      await Promise.all(batchPromises);
+
+      // Commit the batch write operation
+      await batch.commit();
+
+      res.status(201).json({
+        message: "Materials created for eligible users in the dormitory.",
+      });
+    } catch (error) {
+      console.error("Error creating materials for all users:", error);
+      res.status(500).json({ error: "Internal server error." });
+    }
+  }
+);
+
 router.get(
   "/usermaterials/:userId",
   checkRole(["STUDENT", "Admin", "SCH", "KTX"]),
@@ -449,7 +500,6 @@ router.get(
       // Extract and return the materials data
       const userData = userMaterialsSnapshot.docs[0].data();
       const materials = userData.materials;
-
       res.status(200).json(materials);
     } catch (error) {
       console.error("Error fetching user materials:", error);
