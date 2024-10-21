@@ -220,9 +220,8 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
           requestEdit = passportIsRequestEdit;
           passportEntered = await checkPassportEntered(doc);
 
-          const twoMonthsBeforeNow = new Date();
-          twoMonthsBeforeNow.setMonth(twoMonthsBeforeNow.getMonth() - 2);
-
+          const twoMonthsLater = new Date();
+          twoMonthsLater.setMonth(twoMonthsLater.getMonth() + 2);
           // Convert visaUntilDate to a JavaScript Date object if it's not already
           const visaDate =
             visaUntilDate instanceof Date
@@ -230,8 +229,7 @@ router.get("/list", checkRole(["KTX"]), async (req, res) => {
               : visaUntilDate.toDate
               ? visaUntilDate.toDate()
               : new Date(visaUntilDate);
-
-          if (visaDate < twoMonthsBeforeNow) {
+          if (visaDate <= twoMonthsLater && visaDate >= new Date()) {
             isVisaExpired = true;
           }
         } else {
