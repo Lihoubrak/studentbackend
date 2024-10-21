@@ -58,14 +58,14 @@ app.use("/payments/v21", paymentRouter);
 let cronJob = null;
 const scheduleCronJob = () => {
   if (!cronJob) {
-    // cronJob = cron.schedule("0 0 1 * *", async () => {
-    //   console.log("Running cron job once every month");
-    //   await runCronJob();
-    // });
-    cronJob = cron.schedule("* * * * *", async () => {
-      console.log("Running cron job every minute");
+    cronJob = cron.schedule("0 0 1 * *", async () => {
+      console.log("Running cron job once every month");
       await runCronJob();
     });
+    //   cronJob = cron.schedule("* * * * *", async () => {
+    //     console.log("Running cron job every minute");
+    //     await runCronJob();
+    //   });
   }
 };
 // Start the cron job immediately when the server starts
@@ -97,6 +97,10 @@ app.post("/stop-cron-job", checkRole(["KTX"]), (req, res) => {
     res.status(500).send("Internal Server Error");
   }
 });
+app.get("/", (req, res) => {
+  res.send("Hello World!");
+});
+
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
