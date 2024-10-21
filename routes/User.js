@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcrypt");
 const { generateToken, checkRole } = require("../middleware/authenticateToken");
-const { firestore, fireauth } = require("../firebase/firebase");
+const { firestore } = require("../firebase/firebase");
 const { sendVerificationCode } = require("../utils/sendVerificationCode");
 const router = express.Router();
 router.post("/register", async (req, res) => {
@@ -125,6 +125,7 @@ router.post("/register", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { username, password, expoToken } = req.body;
+
     if (!username || !password) {
       return res
         .status(400)
